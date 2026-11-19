@@ -1,4 +1,4 @@
-# 🎬 3D 电影院选座视角模拟器 (3D Cinema Seat Previewer)
+﻿# 🎬 3D 电影院选座视角模拟器 (3D Cinema Seat Previewer)
 
 <p align="center">
   <img src="https://img.shields.io/badge/Three.js-WebGL-000000?style=flat-square&logo=three.js" alt="Three.js" />
@@ -9,7 +9,7 @@
 
 一款基于 **Three.js** 构建的纯前端、零构建、单文件 **3D 影院选座视角模拟器**。在购票前即可沉浸式预览不同影厅、不同排号与座位的真实银幕视野、前排遮挡情况以及专业光学观影评分。
 
-> 🌐 **在线体验地址**：[https://你的用户名.github.io/cinema-seat-3d/](https://liENli1203.github.io/cinema-seat-3d/)
+> 🌐 **在线体验地址**：[https://liENli1203.github.io/cinema-seat-3d/](https://liENli1203.github.io/cinema-seat-3d/)
 
 ---
 
@@ -55,7 +55,7 @@
 
 1. 克隆或下载仓库到本地：
    ```bash
-   git clone [https://github.com/liENli1203/cinema-seat-3d.git](https://github.com/你的用户名/cinema-seat-3d.git)
+   git clone [https://github.com/liENli1203/cinema-seat-3d.git](https://github.com/liENli1203/cinema-seat-3d.git)
    ```
 2. 直接使用现代浏览器（Chrome / Edge / Safari / Firefox）双击打开 `index.html` 即可运行。
 3. 如需二次部署，只需将 `index.html` 推送至 GitHub 仓库并开启 **GitHub Pages**，或直接导入 **Cloudflare Pages / Vercel**。
