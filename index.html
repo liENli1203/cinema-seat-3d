@@ -1,0 +1,3573 @@
+<!DOCTYPE html>
+<html lang="zh-CN" class="dark" data-layout="desktop">
+<head>
+  <meta charset="UTF-8" />
+  <!-- 全面支持刘海屏 / 灵动岛安全区域与移动端视口 -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#07090f" />
+  <title>3D 影院选座视角模拟器 | 全端与手机横屏适配版</title>
+
+  <!-- 加载 Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Inter"', '"PingFang SC"', '"Microsoft YaHei"', 'system-ui', 'sans-serif'],
+          },
+          colors: {
+            cinema: {
+              bg: '#07090f',
+              gold: '#f5c451',
+              blue: '#38bdf8',
+              crimson: '#c81e3a',
+            }
+          }
+        }
+      }
+    };
+  </script>
+
+  <style>
+    /* =====================================================================
+       1. 基础重置、动态视口与安全区域变量
+       ===================================================================== */
+    :root {
+      --sat: env(safe-area-inset-top, 0px);
+      --sar: env(safe-area-inset-right, 0px);
+      --sab: env(safe-area-inset-bottom, 0px);
+      --sal: env(safe-area-inset-left, 0px);
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100vw;
+      width: 100dvw;
+      height: 100vh;
+      height: 100dvh;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background-color: #07090f;
+      color: #f3f4f6;
+      user-select: none;
+      -webkit-user-select: none;
+      font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    /* 3D 视口全屏画布 */
+    #canvas-container {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      width: 100dvw;
+      height: 100vh;
+      height: 100dvh;
+      z-index: 1;
+      touch-action: none;
+      cursor: grab;
+    }
+    #canvas-container:active {
+      cursor: grabbing;
+    }
+    #canvas-container.pointer-seat {
+      cursor: pointer;
+    }
+    #canvas-container canvas {
+      display: block;
+      width: 100% !important;
+      height: 100% !important;
+      touch-action: none;
+    }
+
+    /* =====================================================================
+       2. 三态布局显隐控制系统 (CSS 媒体查询兜底 + JS data-layout 精确同步)
+       - mobile-landscape: 横屏且高度 <= 580px
+       - mobile-portrait:  宽度 <= 768px 且竖屏
+       - desktop:          宽屏桌面端
+       ===================================================================== */
+    .only-desktop,
+    .only-portrait,
+    .only-landscape {
+      display: none !important;
+    }
+
+    /* 默认桌面端首屏兜底 */
+    @media (min-width: 769px) and (min-height: 581px) {
+      html:not([data-layout]) .only-desktop { display: flex !important; }
+    }
+    /* 默认手机竖屏首屏兜底 */
+    @media (max-width: 768px) and (orientation: portrait) {
+      html:not([data-layout]) .only-portrait { display: flex !important; }
+    }
+    /* 默认手机横屏首屏兜底 */
+    @media (orientation: landscape) and (max-height: 580px) {
+      html:not([data-layout]) .only-landscape { display: flex !important; }
+    }
+
+    /* JS 精确同步后的强一致显隐规则 */
+    html[data-layout="desktop"] .only-desktop { display: flex !important; }
+    html[data-layout="desktop"] .only-desktop-block { display: block !important; }
+    html[data-layout="mobile-portrait"] .only-portrait { display: flex !important; }
+    html[data-layout="mobile-landscape"] .only-landscape { display: flex !important; }
+
+    /* 允许 hidden 类覆盖显隐 */
+    .force-hidden {
+      display: none !important;
+    }
+
+    /* =====================================================================
+       3. 高级暗黑影院毛玻璃材质与微交互
+       ===================================================================== */
+    .glass-panel {
+      background: rgba(9, 12, 21, 0.84);
+      backdrop-filter: blur(22px);
+      -webkit-backdrop-filter: blur(22px);
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.07);
+    }
+
+    .glass-pill {
+      background: rgba(11, 15, 26, 0.84);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid rgba(255, 255, 255, 0.13);
+      box-shadow: 0 8px 28px rgba(0, 0, 0, 0.52);
+    }
+
+    /* 独立滚动区域（防止穿透触发页面下拉刷新或滚动） */
+    .custom-scroll {
+      -webkit-overflow-scrolling: touch;
+      overscroll-behavior: contain;
+    }
+    .custom-scroll::-webkit-scrollbar {
+      width: 5px;
+      height: 5px;
+    }
+    .custom-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.03);
+      border-radius: 99px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb {
+      background: rgba(255, 255, 255, 0.2);
+      border-radius: 99px;
+    }
+    .custom-scroll::-webkit-scrollbar-thumb:hover {
+      background: rgba(245, 196, 81, 0.55);
+    }
+
+    /* 定制滑块 */
+    input[type="range"].cinema-slider {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.16);
+      border-radius: 99px;
+      outline: none;
+    }
+    input[type="range"].cinema-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 19px;
+      height: 19px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #fde68a, #f59e0b);
+      border: 2px solid #0b0e17;
+      box-shadow: 0 0 12px rgba(245, 196, 81, 0.72);
+      cursor: pointer;
+      transition: transform 0.15s ease;
+    }
+    input[type="range"].cinema-slider::-webkit-slider-thumb:active {
+      transform: scale(1.18);
+    }
+
+    /* 2D 选座按钮微交互 */
+    .seat-btn {
+      transition: transform 0.13s ease, background-color 0.14s ease, box-shadow 0.14s ease;
+      flex-shrink: 0;
+    }
+    .seat-btn:hover {
+      transform: scale(1.15);
+      z-index: 5;
+    }
+    .seat-btn.selected {
+      background: linear-gradient(135deg, #fde047, #f59e0b) !important;
+      color: #0b0e17 !important;
+      border-color: #fef08a !important;
+      box-shadow: 0 0 12px rgba(245, 196, 81, 0.92);
+      transform: scale(1.15);
+      z-index: 6;
+      font-weight: 800;
+    }
+    .seat-btn.golden:not(.selected) {
+      border-color: rgba(245, 196, 81, 0.82);
+      box-shadow: inset 0 0 6px rgba(245, 196, 81, 0.3);
+    }
+
+    /* 银幕微弧指示条 */
+    .mini-screen-bar {
+      height: 6px;
+      border-radius: 0 0 50% 50%;
+      background: linear-gradient(90deg, rgba(148,163,184,0.16), rgba(226,232,240,0.95), rgba(148,163,184,0.16));
+      box-shadow: 0 4px 16px rgba(56, 189, 248, 0.48);
+    }
+
+    /* =====================================================================
+       4. 桌面面板 & 移动竖屏底部抽屉 & 移动横屏右侧滑出抽屉动画
+       ===================================================================== */
+    .ui-fade {
+      transition: opacity 0.25s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    .ui-hidden {
+      opacity: 0 !important;
+      pointer-events: none !important;
+    }
+    .panel-left-hidden {
+      transform: translateX(-114%);
+      opacity: 0;
+      pointer-events: none;
+    }
+    .panel-right-hidden {
+      transform: translateX(114%);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* 竖屏 Bottom Sheet */
+    #portrait-sheet {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      z-index: 42;
+      max-height: 60dvh;
+      transform: translateY(108%);
+      transition: transform 0.32s cubic-bezier(0.22, 1, 0.36, 1);
+      will-change: transform;
+      padding-bottom: max(0.75rem, var(--sab));
+    }
+    #portrait-sheet.open {
+      transform: translateY(0);
+    }
+    #portrait-sheet.dragging {
+      transition: none !important;
+    }
+
+    /* 横屏 Right-Side Slide-Over Drawer */
+    #landscape-drawer {
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      right: 0;
+      z-index: 44;
+      width: clamp(280px, 44vw, 370px);
+      max-width: calc(100dvw - 56px);
+      padding-top: max(0.45rem, var(--sat));
+      padding-bottom: max(0.45rem, var(--sab));
+      padding-right: max(0.5rem, var(--sar));
+      transform: translateX(108%);
+      transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+      will-change: transform;
+    }
+    #landscape-drawer.open {
+      transform: translateX(0);
+    }
+    #landscape-drawer.dragging {
+      transition: none !important;
+    }
+
+    /* 横屏右侧悬浮垂直 Dock，抽屉滑入时优雅退让 */
+    #landscape-dock {
+      position: fixed;
+      right: calc(var(--sar) + 8px);
+      top: 50%;
+      transform: translateY(-50%);
+      z-index: 35;
+      transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), opacity 0.24s ease;
+    }
+    #landscape-dock.dock-shifted {
+      transform: translate(120%, -50%);
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* 旋转动画 */
+    @keyframes spin360 {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spin-once {
+      animation: spin360 0.65s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .spin-loop {
+      animation: spin360 1s linear infinite;
+    }
+
+    /* 安全区域辅助类 */
+    .safe-top-pad { padding-top: max(0.6rem, var(--sat)); }
+    .safe-bottom-pad { padding-bottom: max(0.5rem, var(--sab)); }
+    .land-top-bar-pad {
+      padding-top: max(0.35rem, var(--sat));
+      padding-left: max(0.55rem, var(--sal));
+      padding-right: max(0.55rem, var(--sar));
+    }
+    .pure-exit-pos {
+      top: max(0.65rem, var(--sat));
+      right: max(0.65rem, var(--sar));
+    }
+  </style>
+</head>
+<body>
+  <!-- ================= 1. 3D WebGL 渲染主容器 ================= -->
+  <div id="canvas-container"></div>
+
+  <!-- ================= 2. 启动加载遮罩层 (支持多源 CDN 节点状态) ================= -->
+  <div id="loading-overlay"
+       class="fixed inset-0 z-[75] bg-[#07090f] flex flex-col items-center justify-center px-6 text-center transition-opacity duration-300">
+    <div class="relative w-14 h-14 mb-4">
+      <div class="absolute inset-0 rounded-full border-2 border-amber-400/20"></div>
+      <div class="absolute inset-0 rounded-full border-2 border-transparent border-t-amber-400 border-r-sky-400 spin-loop"></div>
+      <div class="absolute inset-2 rounded-full bg-gradient-to-br from-amber-400/20 to-sky-500/20 flex items-center justify-center text-lg">
+        🎬
+      </div>
+    </div>
+    <h1 class="text-base font-bold tracking-wide text-white mb-1">正在构建 3D 影院空间</h1>
+    <p id="loading-status" class="text-xs text-gray-400 max-w-xs">正在加载 Three.js 3D 渲染引擎...</p>
+    <button id="btn-loading-retry"
+            class="hidden mt-4 px-5 py-2 rounded-full bg-sky-500/20 hover:bg-sky-500/30 border border-sky-400/40 text-xs font-semibold text-sky-300 transition active:scale-95">
+      加载较慢？点击立即重试
+    </button>
+  </div>
+
+  <!-- ================= 3. 容错与 WebGL 上下文异常恢复遮罩 ================= -->
+  <div id="error-overlay"
+       class="hidden fixed inset-0 z-[85] bg-[#06080e]/95 backdrop-blur-xl flex flex-col items-center justify-center px-5 text-center">
+    <div class="glass-panel max-w-sm w-full rounded-3xl p-5 space-y-3.5 border border-rose-500/35">
+      <div class="w-12 h-12 mx-auto rounded-2xl bg-rose-500/15 border border-rose-500/35 flex items-center justify-center text-xl">
+        ⚠️
+      </div>
+      <div class="space-y-1">
+        <h2 class="text-sm sm:text-base font-bold text-white" id="error-title">3D 影院加载遇到异常</h2>
+        <p class="text-xs text-gray-300 leading-relaxed" id="error-desc">
+          可能由于网络波动导致 3D 引擎超时，或移动端切换后台引起 WebGL 上下文中断。
+        </p>
+      </div>
+      <div class="flex flex-col gap-2 pt-1">
+        <button id="btn-error-rebuild"
+                class="w-full py-2.5 rounded-2xl bg-gradient-to-r from-sky-400 to-blue-500 hover:from-sky-300 hover:to-blue-400 text-gray-950 font-bold text-xs sm:text-sm shadow-lg shadow-sky-500/25 active:scale-[0.98] transition flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.4" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span>刷新重试 (重新加载 3D 引擎)</span>
+        </button>
+        <button id="btn-error-hard-reload"
+                class="w-full py-2 rounded-2xl bg-white/10 hover:bg-white/15 border border-white/10 text-gray-200 font-medium text-xs active:scale-[0.98] transition">
+          强制重载页面
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 4. 3D 悬停座椅浮标 (桌面端全景模式) ================= -->
+  <div id="seat-hover-tooltip"
+       class="fixed z-40 pointer-events-none hidden px-3 py-1.5 rounded-xl glass-pill text-xs text-white shadow-xl border border-amber-400/45">
+    <div class="font-semibold text-amber-300" id="tooltip-seat-label">6排7座</div>
+    <div class="text-[11px] text-gray-300" id="tooltip-seat-score">综合 98分 · 单击选座 / 双击入座</div>
+  </div>
+
+  <!-- ================= 5. 轻量 Toast 提示容器 ================= -->
+  <div id="toast-container"
+       class="fixed top-14 md:top-20 left-1/2 -translate-x-1/2 z-[70] pointer-events-none flex flex-col items-center gap-1.5 w-[88vw] max-w-sm"></div>
+
+  <!-- ================= 6. 纯享观影悬浮退出按钮 (全模式通用，遵守安全区) ================= -->
+  <button id="exit-pure-btn"
+          class="hidden fixed pure-exit-pos z-50 glass-pill px-3.5 py-2 rounded-full text-xs font-medium text-gray-100 hover:text-amber-300 border border-white/15 hover:border-amber-400/50 flex items-center gap-1.5 transition active:scale-95 opacity-80 hover:opacity-100">
+    <svg class="w-3.5 h-3.5 text-amber-300" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+      <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+    </svg>
+    <span>退出纯享</span>
+  </button>
+
+  <!-- =========================================================================
+       7A. 【桌面端模式】顶部导航栏 + 左右悬浮毛玻璃面板 + 底部提示
+       ========================================================================= -->
+  <header id="desktop-top-bar"
+          class="only-desktop ui-fade fixed top-0 left-0 right-0 z-30 pt-3 px-3.5 items-center justify-between gap-2 pointer-events-none">
+    <!-- 左侧：标题与当前座位徽章 -->
+    <div class="pointer-events-auto glass-pill rounded-2xl px-3.5 py-2 flex items-center gap-3">
+      <div class="w-8 h-8 rounded-xl bg-gradient-to-br from-amber-400 via-amber-500 to-rose-600 flex items-center justify-center shadow-lg shadow-amber-500/20 shrink-0">
+        <svg class="w-4 h-4 text-gray-950" fill="currentColor" viewBox="0 0 24 24">
+          <path d="M4 6a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm2 0v10h12V6H6zm-1 14h14a1 1 0 110 2H5a1 1 0 110-2z"/>
+        </svg>
+      </div>
+      <div class="leading-tight">
+        <div class="text-sm font-bold tracking-wide text-white flex items-center gap-1.5">
+          <span>3D 影院选座视角模拟</span>
+          <span id="desk-seat-badge" class="px-1.5 py-0.5 text-[11px] font-semibold rounded-md bg-amber-400/20 text-amber-300 border border-amber-400/35">6排7座</span>
+          <span id="desk-score-badge" class="px-1.5 py-0.5 text-[11px] font-mono font-bold rounded-md bg-emerald-500/20 text-emerald-300 border border-emerald-400/35">S+ 98</span>
+        </div>
+        <div id="desk-hall-sub" class="text-[11px] text-gray-400">标准厅 · 10排×14座 · 宽银幕</div>
+      </div>
+    </div>
+
+    <!-- 中间：4种影厅规格切换 -->
+    <div class="pointer-events-auto glass-pill rounded-2xl p-1 flex items-center gap-1">
+      <button data-preset="standard" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap">标准厅</button>
+      <button data-preset="imax" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap">IMAX 巨幕</button>
+      <button data-preset="dolby" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap">杜比影院</button>
+      <button data-preset="vip" class="preset-btn px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap">小型 VIP</button>
+    </div>
+
+    <!-- 右侧：双视角 + 回正 + 高亮蓝色刷新按钮 + 纯享模式 -->
+    <div class="pointer-events-auto flex items-center gap-1.5">
+      <div class="glass-pill rounded-2xl p-1 flex items-center gap-1">
+        <button id="btn-mode-fp" class="px-2.5 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 bg-amber-400 text-gray-950 shadow">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+            <path stroke-linecap="round" stroke-linejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          </svg>
+          <span>第一人称</span>
+        </button>
+        <button id="btn-mode-overview" class="px-2.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5 text-gray-300 hover:text-white">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9" />
+          </svg>
+          <span>3D 全景</span>
+        </button>
+      </div>
+
+      <button id="btn-desk-recenter" title="视角回正至银幕中心 (快捷键 R)"
+              class="glass-pill px-2.5 py-2 rounded-2xl text-xs font-medium text-amber-300 hover:bg-amber-400/15 hover:border-amber-400/40 active:scale-95 transition flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3" />
+          <path stroke-linecap="round" d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+        </svg>
+        <span class="hidden xl:inline">回正</span>
+      </button>
+
+      <!-- 高亮蓝色刷新按钮 -->
+      <button id="btn-desk-refresh" title="就地重建 3D 渲染器，防止加载异常或画面卡顿"
+              class="glass-pill px-3 py-2 rounded-2xl text-xs font-semibold text-sky-300 bg-sky-500/15 border border-sky-400/45 hover:bg-sky-400/25 hover:border-sky-300/70 active:scale-95 transition flex items-center gap-1.5 shadow-md shadow-sky-500/15">
+        <svg class="refresh-spin-target w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+        <span>刷新</span>
+      </button>
+
+      <button id="btn-desk-pure" title="隐藏全部 UI 面板，纯享银幕视角"
+              class="glass-pill px-3 py-2 rounded-2xl text-xs font-medium text-gray-200 hover:text-amber-300 hover:border-amber-400/40 active:scale-95 transition flex items-center gap-1.5">
+        <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+        </svg>
+        <span class="hidden lg:inline">纯享观影</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- 桌面端左侧面板：2D选座 + 环境控制 + 银幕内容 -->
+  <aside id="desktop-left-panel"
+         class="only-desktop ui-fade fixed top-20 left-3.5 z-20 w-[336px] lg:w-[358px] max-h-[calc(100dvh-7.4rem)] flex-col glass-panel rounded-2xl overflow-hidden">
+    <div class="px-4 py-2.5 border-b border-white/10 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#f5c451]"></span>
+        <h2 class="text-xs font-semibold tracking-wider text-gray-100 uppercase">选座 · 环境与银幕</h2>
+      </div>
+      <button id="btn-collapse-left" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition" title="收起左侧面板">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+        </svg>
+      </button>
+    </div>
+    <div id="desktop-left-body" class="p-3.5 space-y-4 overflow-y-auto custom-scroll"></div>
+  </aside>
+
+  <button id="btn-expand-left"
+          class="force-hidden fixed top-20 left-3.5 z-20 glass-pill px-3 py-2.5 rounded-xl text-gray-200 hover:text-amber-300 transition items-center gap-1.5 text-xs">
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+    </svg>
+    <span>选座与环境</span>
+  </button>
+
+  <!-- 桌面端右侧面板：科学观影光学评测 + 影厅建筑规格 -->
+  <aside id="desktop-right-panel"
+         class="only-desktop ui-fade fixed top-20 right-3.5 z-20 w-[312px] lg:w-[336px] max-h-[calc(100dvh-7.4rem)] flex-col glass-panel rounded-2xl overflow-hidden">
+    <div class="px-4 py-2.5 border-b border-white/10 flex items-center justify-between shrink-0">
+      <div class="flex items-center gap-2">
+        <span class="w-2 h-2 rounded-full bg-sky-400 shadow-[0_0_8px_#38bdf8]"></span>
+        <h2 class="text-xs font-semibold tracking-wider text-gray-100 uppercase">实时光学观影评测</h2>
+      </div>
+      <button id="btn-collapse-right" class="text-gray-400 hover:text-white p-1 rounded-lg hover:bg-white/10 transition" title="收起右侧面板">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+    </div>
+    <div id="desktop-right-body" class="p-3.5 space-y-4 overflow-y-auto custom-scroll"></div>
+  </aside>
+
+  <button id="btn-expand-right"
+          class="force-hidden fixed top-20 right-3.5 z-20 glass-pill px-3 py-2.5 rounded-xl text-gray-200 hover:text-amber-300 transition items-center gap-1.5 text-xs">
+    <span>观影评测</span>
+    <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+      <path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7" />
+    </svg>
+  </button>
+
+  <!-- 桌面端底部操作提示 -->
+  <div id="desktop-bottom-hint"
+       class="only-desktop ui-fade fixed bottom-3.5 left-1/2 -translate-x-1/2 z-20 glass-pill px-4 py-1.5 rounded-full text-[11px] text-gray-300 items-center gap-2 pointer-events-none">
+    <span class="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+    <span id="hint-text">按住拖拽自由环顾影厅 · 方向键快速切座 · 快捷键 R 居中回正</span>
+  </div>
+
+  <!-- =========================================================================
+       7B. 【手机竖屏模式 (mobile-portrait)】精简顶栏 + 底部抽屉 + 底部悬浮 Dock
+       ========================================================================= -->
+  <header id="portrait-top-bar"
+          class="only-portrait ui-fade fixed top-0 left-0 right-0 z-30 safe-top-pad px-3 items-center justify-between gap-2 pointer-events-none">
+    <!-- 左：影厅/座位/评分胶囊 -->
+    <button id="port-top-seat-pill"
+            class="pointer-events-auto glass-pill rounded-2xl px-3 py-1.5 min-h-[42px] flex items-center gap-2 min-w-0 max-w-[58vw] active:scale-[0.98] transition">
+      <span class="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_8px_#f5c451] shrink-0"></span>
+      <div class="flex flex-col text-left min-w-0 leading-tight">
+        <span id="port-header-seat" class="text-xs font-bold text-white truncate">标准厅 · 6排7座</span>
+        <span id="port-header-view-tag" class="text-[10px] text-gray-400 truncate">第一人称视角</span>
+      </div>
+      <span id="port-header-score"
+            class="shrink-0 px-1.5 py-0.5 rounded-lg text-[11px] font-mono font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/35">
+        S+ 98
+      </span>
+    </button>
+
+    <!-- 右：回正 + 高亮蓝色刷新 + 纯享 -->
+    <div class="pointer-events-auto flex items-center gap-1.5 shrink-0">
+      <button id="btn-port-recenter" aria-label="回正视角"
+              class="w-10 h-10 glass-pill rounded-2xl flex items-center justify-center text-amber-300 active:scale-90 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3" />
+          <path stroke-linecap="round" d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+        </svg>
+      </button>
+      <button id="btn-port-refresh" aria-label="刷新重建 3D 场景"
+              class="w-10 h-10 glass-pill rounded-2xl flex items-center justify-center text-sky-300 bg-sky-500/20 border border-sky-400/50 active:scale-90 transition shadow-md shadow-sky-500/20">
+        <svg class="refresh-spin-target w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+      <button id="btn-port-pure" aria-label="纯享观影"
+              class="w-10 h-10 glass-pill rounded-2xl flex items-center justify-center text-gray-200 active:scale-90 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 手机竖屏底部抽屉 (Bottom Sheet) -->
+  <section id="portrait-sheet"
+           class="only-portrait flex-col glass-panel rounded-t-3xl border-b-0 shadow-[0_-16px_48px_rgba(0,0,0,0.78)]">
+    <div id="portrait-sheet-header" class="shrink-0 pt-2.5 pb-2 px-4 border-b border-white/10 touch-none cursor-grab">
+      <div class="w-10 h-1.5 rounded-full bg-white/25 mx-auto mb-2"></div>
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center gap-2 min-w-0">
+          <span id="port-sheet-icon" class="text-base shrink-0">💺</span>
+          <h3 id="port-sheet-title" class="text-sm font-bold text-white truncate">选座平面图</h3>
+          <span id="port-sheet-subtitle" class="text-[11px] text-amber-300 font-medium truncate">6排7座</span>
+        </div>
+        <button id="btn-close-port-sheet" aria-label="关闭抽屉"
+                class="w-8 h-8 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center text-gray-300 active:scale-90 transition shrink-0">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.2" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div id="portrait-sheet-body" class="p-4 space-y-4 overflow-y-auto custom-scroll flex-1"></div>
+  </section>
+
+  <!-- 手机竖屏底部悬浮 Dock -->
+  <nav id="portrait-dock"
+       class="only-portrait ui-fade fixed bottom-0 left-0 right-0 z-30 px-3 safe-bottom-pad pointer-events-none">
+    <div class="pointer-events-auto glass-pill rounded-2xl p-1.5 w-full grid grid-cols-4 gap-1">
+      <button data-drawer="seats" class="port-dock-btn py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-base leading-none">💺</span>
+        <span>选座</span>
+      </button>
+      <button data-drawer="metrics" class="port-dock-btn py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-base leading-none">📊</span>
+        <span>评测</span>
+      </button>
+      <button data-drawer="hall" class="port-dock-btn py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-base leading-none">🎬</span>
+        <span>影厅与银幕</span>
+      </button>
+      <button id="btn-port-toggle-view" class="py-2 px-1 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[11px] font-semibold text-amber-300 bg-amber-400/15 border border-amber-400/30 active:scale-95 transition">
+        <span class="mob-view-icon text-base leading-none">🌐</span>
+        <span class="mob-view-label">3D 全景</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- =========================================================================
+       7C. 【手机横屏专属模式 (mobile-landscape)】
+           超薄悬浮顶栏 (~40px) + 右侧垂直悬浮 Dock + 右侧滑出抽屉 (防挤压高度)
+       ========================================================================= -->
+  <header id="landscape-top-bar"
+          class="only-landscape ui-fade fixed top-0 left-0 right-0 z-30 land-top-bar-pad items-center justify-between gap-2 pointer-events-none">
+    <!-- 左胶囊：影厅 + 座位 + 评分徽章 (点击直达评测抽屉) -->
+    <button id="land-top-eval-pill"
+            class="pointer-events-auto glass-pill rounded-full h-9 px-3 flex items-center gap-2 max-w-[54vw] active:scale-[0.97] transition">
+      <span class="w-2 h-2 rounded-full bg-amber-400 shadow-[0_0_7px_#f5c451] shrink-0"></span>
+      <span id="land-header-seat" class="text-xs font-bold text-white truncate">标准厅 · 6排7座</span>
+      <span id="land-header-score"
+            class="shrink-0 px-2 py-0.5 rounded-full text-[11px] font-mono font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/40">
+        S+ 98
+      </span>
+    </button>
+
+    <!-- 右胶囊：回正 / 高亮蓝刷新 / 全屏(支持时显示) / 纯享 -->
+    <div class="pointer-events-auto glass-pill rounded-full p-0.5 flex items-center gap-1 shrink-0">
+      <button id="btn-land-recenter" aria-label="回正视角" title="回正"
+              class="w-9 h-9 rounded-full flex items-center justify-center text-amber-300 hover:bg-white/10 active:scale-90 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.1" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="3" />
+          <path stroke-linecap="round" d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+        </svg>
+      </button>
+
+      <button id="btn-land-refresh" aria-label="刷新 3D 场景" title="刷新"
+              class="w-9 h-9 rounded-full flex items-center justify-center text-sky-300 bg-sky-500/25 border border-sky-400/50 active:scale-90 transition shadow-sm shadow-sky-500/25">
+        <svg class="refresh-spin-target w-4 h-4" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+        </svg>
+      </button>
+
+      <!-- 全屏 API 按钮（若浏览器不支持 requestFullscreen 则自动隐藏） -->
+      <button id="btn-land-fullscreen" aria-label="切换全屏" title="全屏"
+              class="w-9 h-9 rounded-full flex items-center justify-center text-gray-200 hover:bg-white/10 active:scale-90 transition">
+        <svg id="land-fs-icon-enter" class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
+        </svg>
+        <svg id="land-fs-icon-exit" class="hidden w-4 h-4 text-amber-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 9H5V5m10 4h4V5M9 15H5v4m10-4h4v4" />
+        </svg>
+      </button>
+
+      <button id="btn-land-pure" aria-label="纯享观影" title="纯享"
+              class="w-9 h-9 rounded-full flex items-center justify-center text-gray-200 hover:bg-white/10 active:scale-90 transition">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M3 3l18 18" />
+        </svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- 手机横屏右侧垂直悬浮 Dock (绝不占用宝贵的垂直高度) -->
+  <nav id="landscape-dock" class="only-landscape ui-fade">
+    <div class="glass-pill rounded-2xl p-1 flex flex-col items-center gap-1">
+      <button data-drawer="seats" class="land-dock-btn w-12 py-2 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-sm leading-none">💺</span>
+        <span>选座</span>
+      </button>
+      <button data-drawer="metrics" class="land-dock-btn w-12 py-2 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-sm leading-none">📊</span>
+        <span>评测</span>
+      </button>
+      <button data-drawer="hall" class="land-dock-btn w-12 py-2 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium text-gray-200 active:scale-95 transition">
+        <span class="text-sm leading-none">🎬</span>
+        <span>影厅</span>
+      </button>
+      <div class="w-7 h-px bg-white/10 my-0.5"></div>
+      <button id="btn-land-toggle-view" class="w-12 py-2 rounded-xl flex flex-col items-center justify-center gap-0.5 text-[10px] font-semibold text-amber-300 bg-amber-400/15 border border-amber-400/35 active:scale-95 transition">
+        <span class="mob-view-icon text-sm leading-none">🌐</span>
+        <span class="mob-view-label-short">全景</span>
+      </button>
+    </div>
+  </nav>
+
+  <!-- 手机横屏右侧滑出抽屉 (带左侧垂直拖拽关闭把手，内容独立流畅滚动) -->
+  <aside id="landscape-drawer"
+         class="only-landscape flex-row glass-panel rounded-l-3xl border-r-0 shadow-[-16px_0_48px_rgba(0,0,0,0.78)]">
+    <!-- 左侧垂直拖拽关闭把手 -->
+    <div id="landscape-drawer-handle"
+         class="w-6 shrink-0 flex items-center justify-center touch-none cursor-grab active:cursor-grabbing border-r border-white/[0.06]"
+         title="向右滑动关闭抽屉">
+      <div class="w-1 h-11 rounded-full bg-white/25"></div>
+    </div>
+
+    <!-- 抽屉主体区 -->
+    <div class="flex-1 flex flex-col min-w-0 h-full overflow-hidden">
+      <!-- 顶部精简标题栏（也支持右滑关闭） -->
+      <div id="landscape-drawer-header"
+           class="shrink-0 px-3 py-2 border-b border-white/10 flex items-center justify-between gap-2 touch-none">
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span id="land-drawer-icon" class="text-sm shrink-0">💺</span>
+          <h3 id="land-drawer-title" class="text-xs font-bold text-white truncate">选座平面图</h3>
+          <span id="land-drawer-subtitle" class="text-[11px] text-amber-300 font-medium truncate">6排7座</span>
+        </div>
+        <button id="btn-close-land-drawer" aria-label="关闭抽屉"
+                class="w-7 h-7 rounded-full bg-white/10 hover:bg-white/15 flex items-center justify-center text-gray-300 active:scale-90 transition shrink-0">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.3" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 独立垂直滚动内容区 -->
+      <div id="landscape-drawer-body" class="flex-1 p-3 space-y-3 overflow-y-auto custom-scroll"></div>
+    </div>
+  </aside>
+
+  <!-- =========================================================================
+       8. 可动态挂载的功能模块仓库 (一套 DOM 跨桌面/竖屏/横屏零重复无缝迁移)
+       ========================================================================= -->
+  <div id="module-vault" class="hidden">
+    <!-- 模块 A: 2D 交互选座平面图 -->
+    <div id="mod-seatmap" class="space-y-2.5">
+      <div class="flex items-center justify-between gap-2">
+        <div class="flex items-center gap-1.5 min-w-0">
+          <span id="seatmap-title" class="text-sm font-bold text-white truncate">6排7座</span>
+          <span id="seatmap-tag" class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-amber-400/20 text-amber-300 border border-amber-400/35 whitespace-nowrap">👑 黄金C位</span>
+        </div>
+        <button id="btn-golden-seat"
+                class="px-2.5 py-1.5 rounded-xl bg-gradient-to-r from-amber-400 to-amber-500 hover:from-amber-300 hover:to-amber-400 text-gray-950 text-[11px] font-bold shadow-md shadow-amber-500/25 active:scale-95 transition flex items-center gap-1 shrink-0">
+          <span>👑</span><span>黄金C位</span>
+        </button>
+      </div>
+
+      <div class="flex items-center justify-between text-[10px] text-gray-400">
+        <span>点击即可实时入座预览</span>
+        <div class="flex items-center gap-2">
+          <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-[3px] bg-amber-400 inline-block"></i>当前</span>
+          <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-[3px] bg-rose-900/95 border border-amber-400/80 inline-block"></i>黄金区</span>
+          <span class="flex items-center gap-1"><i class="w-2.5 h-2.5 rounded-[3px] bg-rose-950/90 border border-white/15 inline-block"></i>可选</span>
+        </div>
+      </div>
+
+      <!-- 银幕微弧方向标识 -->
+      <div class="px-5 pt-0.5 pb-1 flex flex-col items-center">
+        <div class="mini-screen-bar w-full"></div>
+        <span class="text-[9px] text-sky-300/85 tracking-[0.28em] mt-1">银 幕 方 向</span>
+      </div>
+
+      <div id="seat-map-wrapper" class="bg-black/45 rounded-2xl p-2 border border-white/10 overflow-x-auto custom-scroll">
+        <div id="seat-map-grid" class="flex flex-col items-center gap-1 min-w-max mx-auto"></div>
+      </div>
+    </div>
+
+    <!-- 模块 B: 影厅规格选择卡 (用于手机竖屏与横屏抽屉，桌面端已置顶) -->
+    <div id="mod-hall-picker" class="space-y-2">
+      <div class="text-[11px] font-medium text-gray-400">选择影厅规格</div>
+      <div class="grid grid-cols-2 gap-1.5">
+        <button data-preset="standard" class="preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95">
+          <div class="text-xs font-bold">标准厅</div>
+          <div class="text-[10px] opacity-75">10排×14座 · 宽银幕</div>
+        </button>
+        <button data-preset="imax" class="preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95">
+          <div class="text-xs font-bold">IMAX 巨幕</div>
+          <div class="text-[10px] opacity-75">12排×18座 · 微曲面</div>
+        </button>
+        <button data-preset="dolby" class="preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95">
+          <div class="text-xs font-bold">杜比影院</div>
+          <div class="text-[10px] opacity-75">9排×14座 · 蓝光暗场</div>
+        </button>
+        <button data-preset="vip" class="preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95">
+          <div class="text-xs font-bold">小型 VIP</div>
+          <div class="text-[10px] opacity-75">6排×10座 · 真皮宽座</div>
+        </button>
+      </div>
+    </div>
+
+    <!-- 模块 C: 环境与观影人体工学设置 -->
+    <div id="mod-env" class="space-y-3 text-xs pt-2 border-t border-white/10">
+      <div class="space-y-1.5">
+        <div class="flex items-center justify-between">
+          <span class="text-[11px] font-medium text-gray-300">观众身高 (视点高度)</span>
+          <span class="font-mono font-semibold text-amber-300">
+            <span id="height-value">170</span> cm
+            <span id="height-tag" class="text-[10px] text-gray-400 font-sans ml-1">标准成人</span>
+          </span>
+        </div>
+        <input type="range" id="height-slider" class="cinema-slider" min="120" max="190" step="1" value="170" />
+        <div class="flex justify-between text-[10px] text-gray-400 pt-0.5">
+          <button class="height-quick px-2 py-1 rounded-lg bg-white/5 hover:text-amber-300 transition" data-h="125">125cm 儿童</button>
+          <button class="height-quick px-2 py-1 rounded-lg bg-white/5 hover:text-amber-300 transition" data-h="168">168cm 常见</button>
+          <button class="height-quick px-2 py-1 rounded-lg bg-white/5 hover:text-amber-300 transition" data-h="185">185cm 高个</button>
+        </div>
+      </div>
+
+      <!-- 模拟前排观众开关 -->
+      <div class="flex items-center justify-between gap-2 bg-white/[0.035] rounded-xl p-2.5 border border-white/5">
+        <div>
+          <div class="font-medium text-gray-100">模拟前排观众</div>
+          <div class="text-[10px] text-gray-400">测试前排头肩是否遮挡银幕与字幕</div>
+        </div>
+        <button id="toggle-audience" role="switch" aria-checked="false"
+                class="relative inline-flex h-6 w-11 shrink-0 cursor-pointer rounded-full border-2 border-transparent bg-white/15 transition-colors duration-200 ease-in-out">
+          <span id="toggle-audience-knob"
+                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow transition duration-200 ease-in-out translate-x-0"></span>
+        </button>
+      </div>
+
+      <!-- 灯光与视角快捷按钮 -->
+      <div class="grid grid-cols-2 gap-2">
+        <button id="btn-env-lights"
+                class="py-2 px-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-[0.98] border border-white/10 text-gray-100 font-medium transition flex items-center justify-center gap-1.5">
+          <span class="light-icon-sync">🌙</span>
+          <span class="light-label-sync">放映暗场</span>
+        </button>
+        <button id="btn-env-recenter"
+                class="py-2 px-2.5 rounded-xl bg-white/10 hover:bg-white/15 active:scale-[0.98] border border-white/10 text-gray-100 font-medium transition flex items-center justify-center gap-1.5">
+          <svg class="w-3.5 h-3.5 text-amber-300" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+            <circle cx="12" cy="12" r="3" />
+            <path stroke-linecap="round" d="M12 2v4m0 12v4M2 12h4m12 0h4" />
+          </svg>
+          <span id="btn-recenter-text">居中回正</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- 模块 D: 动态银幕片源切换与自定义上传 -->
+    <div id="mod-screen" class="space-y-2 text-xs pt-2 border-t border-white/10">
+      <div class="text-[11px] font-medium text-gray-400 flex items-center justify-between">
+        <span>动态银幕放映画面</span>
+        <span class="text-[10px] text-sky-400/90">实时纹理</span>
+      </div>
+      <div class="grid grid-cols-1 gap-1.5">
+        <button data-screen="scifi" class="screen-mode-btn w-full px-3 py-2 rounded-xl border text-left transition flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <span class="text-base">🌌</span>
+            <div>
+              <div class="font-medium text-gray-100">星际大片预览</div>
+              <div class="text-[10px] text-gray-400">动态星云 · 宽银幕黑边 · 双语字幕</div>
+            </div>
+          </div>
+          <span class="active-dot w-2 h-2 rounded-full bg-amber-400"></span>
+        </button>
+
+        <button data-screen="thx" class="screen-mode-btn w-full px-3 py-2 rounded-xl border text-left transition flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <span class="text-base">🎯</span>
+            <div>
+              <div class="font-medium text-gray-100">THX 视角校准网格</div>
+              <div class="text-[10px] text-gray-400">十字准星 · 同心圆畸变检测框</div>
+            </div>
+          </div>
+          <span class="active-dot w-2 h-2 rounded-full bg-amber-400 hidden"></span>
+        </button>
+
+        <button data-screen="custom" class="screen-mode-btn w-full px-3 py-2 rounded-xl border text-left transition flex items-center justify-between">
+          <div class="flex items-center gap-2.5">
+            <span class="text-base">🖼️</span>
+            <div>
+              <div class="font-medium text-gray-100">自定义本地图片投屏</div>
+              <div id="custom-img-status" class="text-[10px] text-gray-400">点击选择本地剧照/海报投射至银幕</div>
+            </div>
+          </div>
+          <span class="active-dot w-2 h-2 rounded-full bg-amber-400 hidden"></span>
+        </button>
+        <input type="file" id="custom-image-input" accept="image/*" class="hidden" />
+      </div>
+    </div>
+
+    <!-- 模块 E: 实时科学光学观影评测 (0~100 综合分 + S+/S/A/B/C 等级) -->
+    <div id="mod-metrics" class="space-y-3">
+      <div class="rounded-2xl bg-gradient-to-br from-white/[0.06] to-white/[0.02] border border-white/10 p-3 space-y-2.5">
+        <div class="flex items-center justify-between gap-2">
+          <div class="min-w-0">
+            <div class="flex items-center gap-1.5 flex-wrap">
+              <span id="metric-seat-title" class="text-sm font-bold text-white">6排7座</span>
+              <span id="metric-grade-badge" class="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-amber-400/20 text-amber-300 border border-amber-400/40">S+ 黄金C位</span>
+            </div>
+            <div id="metric-summary" class="text-[11px] text-emerald-300 mt-1 leading-snug">视角饱满居中，沉浸感拉满，颈部零负担。</div>
+          </div>
+          <div class="shrink-0 flex flex-col items-center justify-center w-14 h-14 rounded-2xl bg-black/45 border border-amber-400/35 shadow-inner">
+            <span id="metric-score" class="text-2xl font-extrabold font-mono text-amber-300 leading-none">98</span>
+            <span class="text-[9px] text-gray-400 mt-0.5">/ 100</span>
+          </div>
+        </div>
+
+        <!-- 四大光学指标 -->
+        <div class="grid grid-cols-2 gap-2 text-[11px]">
+          <div class="bg-black/35 rounded-xl p-2 border border-white/5">
+            <div class="flex justify-between items-center text-gray-400">
+              <span>水平视角</span>
+              <span id="metric-hfov-status" class="text-[10px] font-medium text-emerald-400">黄金区间</span>
+            </div>
+            <div class="text-sm font-bold font-mono text-white mt-0.5" id="metric-hfov">41.5°</div>
+            <div class="relative w-full h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+              <div id="hfov-ideal-band" class="absolute top-0 bottom-0 bg-emerald-500/35" style="left: 42%; width: 15%;"></div>
+              <div id="metric-hfov-bar" class="relative h-full bg-emerald-400 rounded-full transition-all duration-300" style="width: 50%;"></div>
+            </div>
+            <div id="hfov-ref-label" class="text-[9px] text-gray-500 mt-1">推荐 36°~45° (THX)</div>
+          </div>
+
+          <div class="bg-black/35 rounded-xl p-2 border border-white/5">
+            <div class="flex justify-between items-center text-gray-400">
+              <span>中心/顶仰角</span>
+              <span id="metric-elev-status" class="text-[10px] font-medium text-emerald-400">非常舒适</span>
+            </div>
+            <div class="text-sm font-bold font-mono text-white mt-0.5" id="metric-elev">+6.2° / 21°</div>
+            <div class="w-full h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+              <div id="metric-elev-bar" class="h-full bg-emerald-400 rounded-full transition-all duration-300" style="width: 38%;"></div>
+            </div>
+            <div class="text-[9px] text-gray-500 mt-1">顶仰角 ≤35° 不累脖</div>
+          </div>
+
+          <div class="bg-black/35 rounded-xl p-2 border border-white/5">
+            <div class="flex justify-between items-center text-gray-400">
+              <span>水平偏心角</span>
+              <span id="metric-offaxis-status" class="text-[10px] font-medium text-emerald-400">完美居中</span>
+            </div>
+            <div class="text-sm font-bold font-mono text-white mt-0.5" id="metric-offaxis">1.8°</div>
+            <div class="w-full h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+              <div id="metric-offaxis-bar" class="h-full bg-sky-400 rounded-full transition-all duration-300" style="width: 5%;"></div>
+            </div>
+            <div class="text-[9px] text-gray-500 mt-1">越小透视畸变越低</div>
+          </div>
+
+          <div class="bg-black/35 rounded-xl p-2 border border-white/5">
+            <div class="flex justify-between items-center text-gray-400">
+              <span>视距比 (距/宽)</span>
+              <span id="metric-dist-m" class="text-[10px] text-gray-400 font-mono">10.8m</span>
+            </div>
+            <div class="text-sm font-bold font-mono text-white mt-0.5" id="metric-ratio">0.86×</div>
+            <div class="w-full h-1.5 bg-white/10 rounded-full mt-1.5 overflow-hidden">
+              <div id="metric-ratio-bar" class="h-full bg-purple-400 rounded-full transition-all duration-300" style="width: 55%;"></div>
+            </div>
+            <div class="text-[9px] text-gray-500 mt-1">眼距与银幕宽度比值</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 影厅物理规格参数 -->
+      <div class="rounded-xl bg-white/[0.04] border border-white/5 p-2.5 space-y-1 text-[11px] text-gray-400">
+        <div class="text-gray-200 font-medium mb-1 flex items-center justify-between">
+          <span>影厅建筑规格</span>
+          <span id="spec-hall-name" class="text-amber-300">标准厅</span>
+        </div>
+        <div class="flex justify-between"><span>银幕物理尺寸</span><span id="spec-screen-size" class="text-gray-200 font-mono">12.6m × 5.4m</span></div>
+        <div class="flex justify-between"><span>画幅比例 / 弧度</span><span id="spec-screen-ratio" class="text-gray-200 font-mono">2.33:1 · 平面</span></div>
+        <div class="flex justify-between"><span>阶梯高差</span><span id="spec-step-rise" class="text-gray-200 font-mono">0.28m / 排</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- =========================================================================
+       9. 主程序脚本：多源容错 + 三态响应式 + 水平/垂直视野偏移 + Three.js 影院
+       ========================================================================= -->
+  <script>
+    (function () {
+      'use strict';
+
+      // =========================================================================
+      // 1. 多源 CDN 容错加载配置与状态
+      // =========================================================================
+      const THREE_CDNS = [
+        { name: 'jsDelivr', url: 'https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js' },
+        { name: 'UNPKG', url: 'https://unpkg.com/three@0.128.0/build/three.min.js' },
+        { name: 'cdnjs', url: 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js' }
+      ];
+
+      let isAppReady = false;
+      let loadWatchdogTimer = null;
+      let slowHintTimer = null;
+      let rafId = null;
+
+      // DOM 引用缓存
+      const dom = {
+        canvasContainer: document.getElementById('canvas-container'),
+        loadingOverlay: document.getElementById('loading-overlay'),
+        loadingStatus: document.getElementById('loading-status'),
+        btnLoadingRetry: document.getElementById('btn-loading-retry'),
+        errorOverlay: document.getElementById('error-overlay'),
+        errorTitle: document.getElementById('error-title'),
+        errorDesc: document.getElementById('error-desc'),
+        exitPureBtn: document.getElementById('exit-pure-btn'),
+        toastContainer: document.getElementById('toast-container'),
+        tooltip: document.getElementById('seat-hover-tooltip'),
+        tooltipSeatLabel: document.getElementById('tooltip-seat-label'),
+        tooltipSeatScore: document.getElementById('tooltip-seat-score'),
+
+        // 桌面端容器
+        desktopTopBar: document.getElementById('desktop-top-bar'),
+        desktopLeftPanel: document.getElementById('desktop-left-panel'),
+        desktopRightPanel: document.getElementById('desktop-right-panel'),
+        desktopLeftBody: document.getElementById('desktop-left-body'),
+        desktopRightBody: document.getElementById('desktop-right-body'),
+        desktopBottomHint: document.getElementById('desktop-bottom-hint'),
+        btnExpandLeft: document.getElementById('btn-expand-left'),
+        btnExpandRight: document.getElementById('btn-expand-right'),
+        deskSeatBadge: document.getElementById('desk-seat-badge'),
+        deskScoreBadge: document.getElementById('desk-score-badge'),
+        deskHallSub: document.getElementById('desk-hall-sub'),
+        hintText: document.getElementById('hint-text'),
+        btnModeFp: document.getElementById('btn-mode-fp'),
+        btnModeOverview: document.getElementById('btn-mode-overview'),
+
+        // 竖屏容器
+        portraitTopBar: document.getElementById('portrait-top-bar'),
+        portraitDock: document.getElementById('portrait-dock'),
+        portraitSheet: document.getElementById('portrait-sheet'),
+        portraitSheetHeader: document.getElementById('portrait-sheet-header'),
+        portraitSheetBody: document.getElementById('portrait-sheet-body'),
+        portHeaderSeat: document.getElementById('port-header-seat'),
+        portHeaderViewTag: document.getElementById('port-header-view-tag'),
+        portHeaderScore: document.getElementById('port-header-score'),
+        portSheetIcon: document.getElementById('port-sheet-icon'),
+        portSheetTitle: document.getElementById('port-sheet-title'),
+        portSheetSubtitle: document.getElementById('port-sheet-subtitle'),
+
+        // 横屏容器
+        landscapeTopBar: document.getElementById('landscape-top-bar'),
+        landscapeDock: document.getElementById('landscape-dock'),
+        landscapeDrawer: document.getElementById('landscape-drawer'),
+        landscapeDrawerHandle: document.getElementById('landscape-drawer-handle'),
+        landscapeDrawerHeader: document.getElementById('landscape-drawer-header'),
+        landscapeDrawerBody: document.getElementById('landscape-drawer-body'),
+        landHeaderSeat: document.getElementById('land-header-seat'),
+        landHeaderScore: document.getElementById('land-header-score'),
+        landDrawerIcon: document.getElementById('land-drawer-icon'),
+        landDrawerTitle: document.getElementById('land-drawer-title'),
+        landDrawerSubtitle: document.getElementById('land-drawer-subtitle'),
+        btnLandFullscreen: document.getElementById('btn-land-fullscreen'),
+        landFsIconEnter: document.getElementById('land-fs-icon-enter'),
+        landFsIconExit: document.getElementById('land-fs-icon-exit'),
+
+        // 可迁移模块
+        moduleVault: document.getElementById('module-vault'),
+        modSeatmap: document.getElementById('mod-seatmap'),
+        modHallPicker: document.getElementById('mod-hall-picker'),
+        modEnv: document.getElementById('mod-env'),
+        modScreen: document.getElementById('mod-screen'),
+        modMetrics: document.getElementById('mod-metrics'),
+
+        // 业务控件字段
+        seatmapTitle: document.getElementById('seatmap-title'),
+        seatmapTag: document.getElementById('seatmap-tag'),
+        seatMapGrid: document.getElementById('seat-map-grid'),
+        heightSlider: document.getElementById('height-slider'),
+        heightValue: document.getElementById('height-value'),
+        heightTag: document.getElementById('height-tag'),
+        toggleAudience: document.getElementById('toggle-audience'),
+        toggleAudienceKnob: document.getElementById('toggle-audience-knob'),
+        btnRecenterText: document.getElementById('btn-recenter-text'),
+        customImageInput: document.getElementById('custom-image-input'),
+        customImgStatus: document.getElementById('custom-img-status'),
+
+        // 光学评测字段
+        metricSeatTitle: document.getElementById('metric-seat-title'),
+        metricGradeBadge: document.getElementById('metric-grade-badge'),
+        metricSummary: document.getElementById('metric-summary'),
+        metricScore: document.getElementById('metric-score'),
+        metricHfov: document.getElementById('metric-hfov'),
+        metricHfovStatus: document.getElementById('metric-hfov-status'),
+        metricHfovBar: document.getElementById('metric-hfov-bar'),
+        hfovIdealBand: document.getElementById('hfov-ideal-band'),
+        hfovRefLabel: document.getElementById('hfov-ref-label'),
+        metricElev: document.getElementById('metric-elev'),
+        metricElevStatus: document.getElementById('metric-elev-status'),
+        metricElevBar: document.getElementById('metric-elev-bar'),
+        metricOffaxis: document.getElementById('metric-offaxis'),
+        metricOffaxisStatus: document.getElementById('metric-offaxis-status'),
+        metricOffaxisBar: document.getElementById('metric-offaxis-bar'),
+        metricRatio: document.getElementById('metric-ratio'),
+        metricRatioBar: document.getElementById('metric-ratio-bar'),
+        metricDistM: document.getElementById('metric-dist-m'),
+        specHallName: document.getElementById('spec-hall-name'),
+        specScreenSize: document.getElementById('spec-screen-size'),
+        specScreenRatio: document.getElementById('spec-screen-ratio'),
+        specStepRise: document.getElementById('spec-step-rise')
+      };
+
+      function showToast(msg, duration = 2100) {
+        const el = document.createElement('div');
+        el.className = 'glass-pill px-3.5 py-1.5 rounded-full text-xs text-amber-200 border border-amber-400/40 shadow-lg transition-all duration-300 opacity-0 translate-y-2 text-center';
+        el.textContent = msg;
+        dom.toastContainer.appendChild(el);
+        requestAnimationFrame(() => el.classList.remove('opacity-0', 'translate-y-2'));
+        setTimeout(() => {
+          el.classList.add('opacity-0', '-translate-y-2');
+          setTimeout(() => el.remove(), 300);
+        }, duration);
+      }
+
+      function showErrorOverlay(title, desc) {
+        clearTimeout(loadWatchdogTimer);
+        clearTimeout(slowHintTimer);
+        dom.loadingOverlay.classList.add('hidden');
+        dom.errorTitle.textContent = title || '3D 影院加载遇到异常';
+        dom.errorDesc.textContent = desc || '可能由于网络波动或 WebGL 上下文中断，请点击刷新重试。';
+        dom.errorOverlay.classList.remove('hidden');
+      }
+
+      function hideErrorOverlay() {
+        dom.errorOverlay.classList.add('hidden');
+      }
+
+      function hideLoadingOverlay() {
+        clearTimeout(loadWatchdogTimer);
+        clearTimeout(slowHintTimer);
+        dom.loadingOverlay.style.opacity = '0';
+        dom.loadingOverlay.style.pointerEvents = 'none';
+        setTimeout(() => {
+          dom.loadingOverlay.classList.add('hidden');
+          dom.loadingOverlay.style.opacity = '';
+          dom.loadingOverlay.style.pointerEvents = '';
+        }, 320);
+      }
+
+      function loadScriptWithTimeout(url, timeoutMs) {
+        return new Promise((resolve, reject) => {
+          const script = document.createElement('script');
+          script.src = url;
+          script.async = true;
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (!settled) {
+              settled = true;
+              script.remove();
+              reject(new Error('CDN 加载超时'));
+            }
+          }, timeoutMs);
+
+          script.onload = () => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              resolve();
+            }
+          };
+          script.onerror = () => {
+            if (!settled) {
+              settled = true;
+              clearTimeout(timer);
+              script.remove();
+              reject(new Error('CDN 加载失败'));
+            }
+          };
+          document.head.appendChild(script);
+        });
+      }
+
+      async function ensureThreeLoaded() {
+        if (window.THREE && window.THREE.WebGLRenderer) return true;
+        for (let i = 0; i < THREE_CDNS.length; i++) {
+          const cdn = THREE_CDNS[i];
+          dom.loadingStatus.textContent = `正在加载 3D 引擎 (${cdn.name} ${i + 1}/${THREE_CDNS.length})...`;
+          try {
+            await loadScriptWithTimeout(cdn.url, 3200);
+            if (window.THREE && window.THREE.WebGLRenderer) return true;
+          } catch (err) {
+            console.warn(`CDN [${cdn.name}] 加载失败，自动切换下一个节点`, err);
+          }
+        }
+        throw new Error('所有 Three.js CDN 节点均加载失败，请检查网络后点击刷新重试。');
+      }
+
+      window.addEventListener('error', (ev) => {
+        if (!isAppReady) {
+          showErrorOverlay('启动初始化失败', `脚本异常：${ev.message || '未知错误'}，请点击刷新重试。`);
+        }
+      });
+      window.addEventListener('unhandledrejection', (ev) => {
+        if (!isAppReady) {
+          const msg = ev.reason && ev.reason.message ? ev.reason.message : '资源加载异常';
+          showErrorOverlay('3D 引擎加载异常', msg);
+        }
+      });
+
+      // =========================================================================
+      // 2. 4 种影厅物理规格预设 (单位: 米)
+      // =========================================================================
+      const HALL_PRESETS = {
+        standard: {
+          id: 'standard',
+          name: '标准厅',
+          shortName: '标准厅',
+          subtitle: '标准厅 · 10排×14座 · 宽银幕',
+          rows: 10, cols: 14, aisles: [3, 11],
+          screenWidth: 12.6, screenHeight: 5.4, screenBottomY: 1.75, screenCurve: 0.0,
+          frontDist: 4.4, rowSpacing: 1.06, seatSpacing: 0.62, aisleWidth: 1.12, stepRise: 0.28,
+          idealHfovMin: 36, idealHfovMax: 45, idealHfovTarget: 41,
+          hfovRefText: '推荐 36°~45° (THX)',
+          seatColor: 0x8f1d2e, sconceColor: 0xffc670, ceilingHeightExtra: 2.2,
+          isDolby: false, isIMAX: false, recliner: false
+        },
+        imax: {
+          id: 'imax',
+          name: 'IMAX 巨幕厅',
+          shortName: 'IMAX',
+          subtitle: 'IMAX 巨幕 · 12排×18座 · 微曲面高银幕',
+          rows: 12, cols: 18, aisles: [3, 15],
+          screenWidth: 21.0, screenHeight: 11.4, screenBottomY: 1.15, screenCurve: 1.45,
+          frontDist: 5.0, rowSpacing: 1.08, seatSpacing: 0.62, aisleWidth: 1.25, stepRise: 0.45,
+          idealHfovMin: 48, idealHfovMax: 64, idealHfovTarget: 56,
+          hfovRefText: '推荐 48°~64° (IMAX)',
+          seatColor: 0x7c1828, sconceColor: 0x38bdf8, ceilingHeightExtra: 2.4,
+          isDolby: false, isIMAX: true, recliner: false
+        },
+        dolby: {
+          id: 'dolby',
+          name: '杜比影院',
+          shortName: '杜比',
+          subtitle: '杜比影院 · 9排×14座 · 蓝光吸音暗场',
+          rows: 9, cols: 14, aisles: [3, 11],
+          screenWidth: 15.0, screenHeight: 6.3, screenBottomY: 1.65, screenCurve: 0.35,
+          frontDist: 4.8, rowSpacing: 1.22, seatSpacing: 0.68, aisleWidth: 1.2, stepRise: 0.34,
+          idealHfovMin: 38, idealHfovMax: 48, idealHfovTarget: 43,
+          hfovRefText: '推荐 38°~48° (Dolby)',
+          seatColor: 0x6b1422, sconceColor: 0x3b82f6, ceilingHeightExtra: 2.2,
+          isDolby: true, isIMAX: false, recliner: false
+        },
+        vip: {
+          id: 'vip',
+          name: '小型 VIP 厅',
+          shortName: 'VIP厅',
+          subtitle: '小型 VIP 厅 · 6排×10座 · 宽大真皮沙发',
+          rows: 6, cols: 10, aisles: [2, 8],
+          screenWidth: 9.8, screenHeight: 4.25, screenBottomY: 1.55, screenCurve: 0.0,
+          frontDist: 4.0, rowSpacing: 1.52, seatSpacing: 0.88, aisleWidth: 1.15, stepRise: 0.32,
+          idealHfovMin: 36, idealHfovMax: 45, idealHfovTarget: 40,
+          hfovRefText: '推荐 36°~45° (THX)',
+          seatColor: 0x5c261c, sconceColor: 0xfde68a, ceilingHeightExtra: 2.0,
+          isDolby: false, isIMAX: false, recliner: true
+        }
+      };
+
+      // =========================================================================
+      // 3. 全局状态与 3D 引擎核心变量
+      // =========================================================================
+      const state = {
+        layoutMode: 'desktop', // 'desktop' | 'mobile-portrait' | 'mobile-landscape'
+        presetKey: 'standard',
+        selectedRow: 5,
+        selectedCol: 6,
+        viewMode: 'fp', // 'fp' | 'overview'
+        screenMode: 'scifi', // 'scifi' | 'thx' | 'custom'
+        viewerHeightCm: 170,
+        showAudience: false,
+        houseLightsOn: false,
+        pureMode: false,
+        leftCollapsed: false,
+        rightCollapsed: false,
+        activeDrawer: null, // null | 'seats' | 'metrics' | 'hall' (竖屏与横屏旋转间无缝保持!)
+        customImageObj: null,
+        seatsData: [],
+        goldenSeatIndex: 0
+      };
+
+      let scene, camera, renderer, raycaster;
+      let theaterGroup = null;
+      let seatPickMesh = null;
+      let audienceTorsoMesh = null;
+      let audienceHeadMesh = null;
+      let audienceSeedMask = [];
+      let audienceHeightOffsets = [];
+      let selectionBeaconGroup = null;
+      let hoverOutlineMesh = null;
+      let projectorBeamMesh = null;
+      let ceilingMeshGroup = null;
+
+      let ambientLight = null;
+      let houseLights = [];
+      let screenBounceLights = [];
+      let ceilingBulbMats = [];
+      let wallSconceMats = [];
+
+      let screenCanvas, screenCtx, screenTexture;
+      let screenAnimTime = 0;
+      let scifiStars = [];
+      let currentBounceColor = null;
+      let targetBounceColor = null;
+      let camCtrl = null;
+
+      // 平滑相机视口偏移（竖屏底部抽屉 -> 垂直偏移；横屏右侧抽屉 -> 水平偏移）
+      const viewOffsetAnim = {
+        curX: 0, curY: 0,
+        targetX: 0, targetY: 0,
+        lastAppliedX: 0, lastAppliedY: 0,
+        viewW: window.innerWidth, viewH: window.innerHeight
+      };
+
+      let interactionsBound = false;
+      let uiEventsBound = false;
+
+      // 触摸与鼠标手势（8px 拖拽防误触阈值）
+      const DRAG_THRESHOLD_PX = 8;
+      const pointer = {
+        isDown: false,
+        lastX: 0, lastY: 0,
+        movedDist: 0,
+        pinchStartDist: 0,
+        pinchStartRadius: 18,
+        lastTapTime: 0,
+        lastTapInstance: -1
+      };
+
+      const MOVIE_SUBTITLES = [
+        { zh: '不要温和地走进那个良夜，星海在等待我们的回应。', en: 'Do not go gentle into that good night; the cosmos awaits our call.' },
+        { zh: '前方三万公里处检测到引力奇点，准备启动曲率引擎。', en: 'Gravitational singularity detected 30,000 km ahead. Engaging warp drive.' },
+        { zh: '“唯有爱，能够超越时间与维度的界限。”', en: '"Love is the one thing we are capable of perceiving that transcends time."' },
+        { zh: '全体注意，我们正在穿越卡冈图雅星云边缘。', en: 'All hands brace — crossing the outer rim of the Gargantua Nebula.' },
+        { zh: '这就是人类文明新纪元的黎明。', en: 'Behold the dawn of a new epoch for humanity.' }
+      ];
+
+      // =========================================================================
+      // 4. 三态布局检测与动态视口尺寸工具
+      // =========================================================================
+      function clamp(val, min, max) {
+        return Math.max(min, Math.min(max, val));
+      }
+
+      function getViewportSize() {
+        const vv = window.visualViewport;
+        const w = Math.round(vv ? vv.width : window.innerWidth) || window.innerWidth;
+        const h = Math.round(vv ? vv.height : window.innerHeight) || window.innerHeight;
+        return { w: Math.max(1, w), h: Math.max(1, h) };
+      }
+
+      /**
+       * 精确识别三态布局模式，与 CSS 媒体查询严格一致：
+       * - mobile-landscape: 横屏且高度 <= 580px
+       * - mobile-portrait:  宽度 <= 768px 且竖屏（含正方形）
+       * - desktop:          其余桌面宽屏
+       */
+      function detectLayoutMode() {
+        const { w, h } = getViewportSize();
+        if (w > h && h <= 580) return 'mobile-landscape';
+        if (w <= 768 && h >= w) return 'mobile-portrait';
+        if (w <= 768 && h <= 580) return 'mobile-landscape';
+        return 'desktop';
+      }
+
+      function isMobileLayout(mode = state.layoutMode) {
+        return mode === 'mobile-portrait' || mode === 'mobile-landscape';
+      }
+
+      // =========================================================================
+      // 5. 严格基于真实 3D 物理几何的科学光学观影评测 (不受视口宽高比影响)
+      // =========================================================================
+      function getSeatedEyeOffsetY(heightCm) {
+        return 0.44 + (heightCm / 100) * 0.435;
+      }
+
+      function computeColPositions(preset) {
+        const positions = [];
+        let cursorX = 0;
+        for (let c = 0; c < preset.cols; c++) {
+          if (preset.aisles.includes(c)) cursorX += preset.aisleWidth;
+          positions.push(cursorX);
+          cursorX += preset.seatSpacing;
+        }
+        const centerShift = (positions[positions.length - 1] - positions[0]) / 2;
+        return positions.map(x => x - centerShift);
+      }
+
+      function getRowCoords(preset, rowIdx) {
+        const z = preset.frontDist + rowIdx * preset.rowSpacing;
+        const curveBonus = preset.id === 'imax' ? rowIdx * rowIdx * 0.008 : 0;
+        const floorY = rowIdx * preset.stepRise + curveBonus;
+        return { z, floorY };
+      }
+
+      function evaluateSeatMetrics(preset, rowIdx, colIdx, x, floorY, z, heightCm) {
+        const eyeY = floorY + getSeatedEyeOffsetY(heightCm);
+        const eyePos = new THREE.Vector3(x, eyeY, z);
+
+        const screenCenterY = preset.screenBottomY + preset.screenHeight / 2;
+        const halfW = preset.screenWidth / 2;
+        const halfH = preset.screenHeight / 2;
+        const edgeZ = preset.screenCurve;
+
+        const pCenter = new THREE.Vector3(0, screenCenterY, 0);
+        const pLeft = new THREE.Vector3(-halfW, screenCenterY, edgeZ);
+        const pRight = new THREE.Vector3(halfW, screenCenterY, edgeZ);
+
+        // 1. 真实物理水平视角 HFOV
+        const vL = pLeft.clone().sub(eyePos).normalize();
+        const vR = pRight.clone().sub(eyePos).normalize();
+        const hfov = THREE.MathUtils.radToDeg(Math.acos(clamp(vL.dot(vR), -1, 1)));
+
+        // 2. 垂直仰角 (中心 / 顶部)
+        const horizDist = Math.hypot(x, z);
+        const elevCenter = THREE.MathUtils.radToDeg(Math.atan2(screenCenterY - eyeY, horizDist));
+        const elevTop = THREE.MathUtils.radToDeg(Math.atan2((screenCenterY + halfH) - eyeY, horizDist));
+
+        // 3. 水平偏心角
+        const offAxis = THREE.MathUtils.radToDeg(Math.atan2(Math.abs(x), Math.max(0.1, z)));
+
+        // 4. 眼距与视距比
+        const distToCenter = eyePos.distanceTo(pCenter);
+        const distRatio = distToCenter / preset.screenWidth;
+
+        // 0 ~ 100 综合评分模型
+        let hfovScore = 100;
+        if (hfov < preset.idealHfovMin) {
+          hfovScore = Math.max(20, 100 - (preset.idealHfovMin - hfov) * 3.4);
+        } else if (hfov > preset.idealHfovMax) {
+          hfovScore = Math.max(15, 100 - (hfov - preset.idealHfovMax) * 2.4);
+        } else {
+          hfovScore = 100 - Math.abs(hfov - preset.idealHfovTarget) * 0.85;
+        }
+
+        let elevScore = 100;
+        if (elevTop > 32) elevScore -= (elevTop - 32) * 3.2;
+        if (elevCenter > 15) elevScore -= (elevCenter - 15) * 2.5;
+        else if (elevCenter < -6) elevScore -= (-6 - elevCenter) * 2.0;
+        elevScore = clamp(elevScore, 12, 100);
+
+        let offScore = 100;
+        if (offAxis > 4) {
+          offScore = Math.max(15, 100 - Math.pow((offAxis - 4) / 6.8, 1.45) * 14.5);
+        }
+
+        const totalScore = Math.round(clamp(hfovScore * 0.38 + elevScore * 0.32 + offScore * 0.30, 18, 100));
+
+        let gradeShort = 'A';
+        let gradeText = 'A 舒适推荐';
+        let gradeClass = 'bg-sky-500/20 text-sky-300 border-sky-400/35';
+        if (totalScore >= 94 && offAxis <= 10) {
+          gradeShort = 'S+';
+          gradeText = 'S+ 黄金C位';
+          gradeClass = 'bg-amber-400/20 text-amber-300 border-amber-400/45';
+        } else if (totalScore >= 86) {
+          gradeShort = 'S';
+          gradeText = 'S 极佳视野';
+          gradeClass = 'bg-emerald-500/20 text-emerald-300 border-emerald-400/40';
+        } else if (totalScore >= 75) {
+          gradeShort = 'A';
+          gradeText = 'A 舒适推荐';
+          gradeClass = 'bg-sky-500/20 text-sky-300 border-sky-400/35';
+        } else if (totalScore >= 62) {
+          gradeShort = 'B';
+          gradeText = 'B 一般可用';
+          gradeClass = 'bg-indigo-500/20 text-indigo-300 border-indigo-400/35';
+        } else {
+          gradeShort = 'C';
+          gradeText = 'C 建议慎选';
+          gradeClass = 'bg-rose-500/20 text-rose-300 border-rose-400/40';
+        }
+
+        let tag = '👍 舒适观影区';
+        let tagStyle = 'bg-sky-500/20 text-sky-300 border-sky-400/35';
+        let summary = '视野均衡自然，观影与阅读字幕都较为舒适。';
+
+        if (totalScore >= 93 && offAxis <= 9) {
+          tag = '👑 黄金C位';
+          tagStyle = 'bg-amber-400/20 text-amber-300 border-amber-400/45';
+          summary = '视角饱满居中，画面包裹感拉满，颈部零负担。';
+        } else if (elevTop > 37) {
+          tag = '⚠️ 仰角过大易累脖';
+          tagStyle = 'bg-rose-500/20 text-rose-300 border-rose-400/35';
+          summary = '前排距离过近，需明显抬头，看字幕容易颈部疲劳。';
+        } else if (offAxis > 22) {
+          tag = '📐 偏角畸变明显';
+          tagStyle = 'bg-orange-500/20 text-orange-300 border-orange-400/35';
+          summary = '偏离中轴较远，银幕出现透视梯形畸变与声场偏移。';
+        } else if (totalScore >= 85) {
+          tag = '✨ 视野极佳';
+          tagStyle = 'bg-emerald-500/20 text-emerald-300 border-emerald-400/35';
+          summary = '距离与视角非常理想，沉浸感出色且无明显畸变。';
+        } else if (hfov < preset.idealHfovMin - 9) {
+          tag = '🔭 距离偏远画面小';
+          tagStyle = 'bg-indigo-500/20 text-indigo-300 border-indigo-400/35';
+          summary = '视角相对保守，沉浸感减弱，但颈部放松无压迫。';
+        } else if (hfov > preset.idealHfovMax + 15) {
+          tag = '😵 距离偏近压迫强';
+          tagStyle = 'bg-rose-500/20 text-rose-300 border-rose-400/35';
+          summary = '水平视角过大，观影时需频繁左右扫视整幅银幕。';
+        }
+
+        return {
+          row: rowIdx, col: colIdx,
+          label: `${rowIdx + 1}排${colIdx + 1}座`,
+          x, floorY, z, eyeY,
+          hfov, elevCenter, elevTop, offAxis, distToCenter, distRatio,
+          score: totalScore,
+          gradeShort, gradeText, gradeClass,
+          tag, tagStyle, summary
+        };
+      }
+
+      function computeAllSeatsData() {
+        const preset = HALL_PRESETS[state.presetKey];
+        const colXs = computeColPositions(preset);
+        const list = [];
+        let bestIdx = 0;
+        let bestScore = -1;
+
+        for (let r = 0; r < preset.rows; r++) {
+          const { z, floorY } = getRowCoords(preset, r);
+          for (let c = 0; c < preset.cols; c++) {
+            const info = evaluateSeatMetrics(preset, r, c, colXs[c], floorY, z, state.viewerHeightCm);
+            info.index = list.length;
+            list.push(info);
+            if (info.score > bestScore || (info.score === bestScore && info.offAxis < list[bestIdx].offAxis)) {
+              bestScore = info.score;
+              bestIdx = info.index;
+            }
+          }
+        }
+
+        const goldenThreshold = Math.max(88, bestScore - 7);
+        list.forEach(s => {
+          s.isGoldenZone = s.score >= goldenThreshold && s.offAxis <= 14;
+        });
+
+        state.seatsData = list;
+        state.goldenSeatIndex = bestIdx;
+      }
+
+      function getSeatData(row, col) {
+        const preset = HALL_PRESETS[state.presetKey];
+        return state.seatsData[row * preset.cols + col];
+      }
+
+      // =========================================================================
+      // 6. 动态银幕 Canvas 渲染器 (星际大片 / THX 校准网格 / 自定义本地图片)
+      // =========================================================================
+      function initScreenCanvas() {
+        if (!screenCanvas) {
+          screenCanvas = document.createElement('canvas');
+          screenCanvas.width = 1280;
+          screenCanvas.height = 600;
+          screenCtx = screenCanvas.getContext('2d');
+        }
+        if (scifiStars.length === 0) {
+          for (let i = 0; i < 240; i++) {
+            scifiStars.push({
+              x: Math.random(),
+              y: Math.random(),
+              size: Math.random() * 2.0 + 0.5,
+              speed: Math.random() * 0.015 + 0.003,
+              twinkle: Math.random() * Math.PI * 2,
+              hue: Math.random() > 0.75 ? 205 : (Math.random() > 0.5 ? 42 : 0)
+            });
+          }
+        }
+        if (screenTexture) screenTexture.dispose();
+        screenTexture = new THREE.CanvasTexture(screenCanvas);
+        screenTexture.minFilter = THREE.LinearFilter;
+        screenTexture.magFilter = THREE.LinearFilter;
+        screenTexture.encoding = THREE.sRGBEncoding;
+      }
+
+      function renderSciFiScreen(t) {
+        const ctx = screenCtx;
+        const w = screenCanvas.width;
+        const h = screenCanvas.height;
+        const preset = HALL_PRESETS[state.presetKey];
+
+        const barH = preset.id === 'imax' ? Math.round(h * 0.03) : Math.round(h * 0.09);
+        const viewY = barH;
+        const viewH = h - barH * 2;
+
+        const bgGrad = ctx.createLinearGradient(0, viewY, w, viewY + viewH);
+        bgGrad.addColorStop(0, '#040714');
+        bgGrad.addColorStop(0.5, '#0b1228');
+        bgGrad.addColorStop(1, '#12081c');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, viewY, w, viewH);
+
+        // 动态星云
+        const neb1X = w * (0.28 + Math.sin(t * 0.18) * 0.04);
+        const neb1Y = viewY + viewH * (0.45 + Math.cos(t * 0.14) * 0.05);
+        const g1 = ctx.createRadialGradient(neb1X, neb1Y, 20, neb1X, neb1Y, w * 0.42);
+        g1.addColorStop(0, 'rgba(56, 189, 248, 0.34)');
+        g1.addColorStop(0.45, 'rgba(37, 99, 235, 0.14)');
+        g1.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = g1;
+        ctx.fillRect(0, viewY, w, viewH);
+
+        const neb2X = w * (0.72 + Math.cos(t * 0.15) * 0.04);
+        const neb2Y = viewY + viewH * (0.42 + Math.sin(t * 0.16) * 0.05);
+        const g2 = ctx.createRadialGradient(neb2X, neb2Y, 15, neb2X, neb2Y, w * 0.38);
+        g2.addColorStop(0, 'rgba(245, 158, 11, 0.35)');
+        g2.addColorStop(0.4, 'rgba(190, 24, 93, 0.16)');
+        g2.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = g2;
+        ctx.fillRect(0, viewY, w, viewH);
+
+        // 闪烁星海
+        for (let i = 0; i < scifiStars.length; i++) {
+          const s = scifiStars[i];
+          const sx = ((s.x + t * s.speed * 0.12) % 1) * w;
+          const sy = viewY + s.y * viewH;
+          const alpha = 0.45 + 0.55 * Math.sin(t * 2.2 + s.twinkle);
+          ctx.fillStyle = s.hue === 0
+            ? `rgba(255,255,255,${alpha.toFixed(2)})`
+            : `hsla(${s.hue}, 85%, 80%, ${alpha.toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(sx, sy, s.size, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // 巨型吸积盘行星
+        const cx = w * 0.54;
+        const cy = viewY + viewH * 0.46;
+        const planetR = viewH * 0.24;
+
+        ctx.save();
+        ctx.translate(cx, cy);
+        ctx.rotate(-0.18);
+        const haloGrad = ctx.createRadialGradient(0, 0, planetR * 0.9, 0, 0, planetR * 2.9);
+        haloGrad.addColorStop(0, 'rgba(255, 226, 158, 0.85)');
+        haloGrad.addColorStop(0.25, 'rgba(245, 158, 11, 0.45)');
+        haloGrad.addColorStop(0.6, 'rgba(56, 189, 248, 0.14)');
+        haloGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = haloGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, planetR * 2.9, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.strokeStyle = 'rgba(254, 240, 188, 0.72)';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.arc(0, 0, planetR * 1.12, Math.PI * 1.05, Math.PI * 1.95);
+        ctx.stroke();
+
+        const coreGrad = ctx.createRadialGradient(-planetR * 0.2, -planetR * 0.2, 5, 0, 0, planetR);
+        coreGrad.addColorStop(0, '#090b12');
+        coreGrad.addColorStop(0.85, '#020308');
+        coreGrad.addColorStop(1, '#f59e0b');
+        ctx.fillStyle = coreGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, planetR, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.scale(1, 0.21);
+        const ringGrad = ctx.createRadialGradient(0, 0, planetR * 1.05, 0, 0, planetR * 3.1);
+        ringGrad.addColorStop(0, 'rgba(255, 250, 230, 0.96)');
+        ringGrad.addColorStop(0.35, 'rgba(251, 191, 36, 0.85)');
+        ringGrad.addColorStop(0.68, 'rgba(234, 88, 12, 0.35)');
+        ringGrad.addColorStop(1, 'rgba(0, 0, 0, 0)');
+        ctx.fillStyle = ringGrad;
+        ctx.beginPath();
+        ctx.arc(0, 0, planetR * 3.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.restore();
+
+        // 变形镜头蓝色眩光
+        const flareY = cy + Math.sin(t * 0.7) * 4;
+        const flareGrad = ctx.createLinearGradient(w * 0.1, flareY, w * 0.92, flareY);
+        flareGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
+        flareGrad.addColorStop(0.45, 'rgba(125, 211, 252, 0.38)');
+        flareGrad.addColorStop(0.55, 'rgba(255, 255, 255, 0.65)');
+        flareGrad.addColorStop(0.65, 'rgba(125, 211, 252, 0.3)');
+        flareGrad.addColorStop(1, 'rgba(56, 189, 248, 0)');
+        ctx.fillStyle = flareGrad;
+        ctx.fillRect(w * 0.1, flareY - 2, w * 0.82, 4);
+
+        // 巡航星舰
+        const shipProgress = (t * 0.045) % 1.35 - 0.18;
+        const shipX = shipProgress * w;
+        const shipY = viewY + viewH * (0.64 - Math.sin(shipProgress * Math.PI) * 0.12);
+        ctx.save();
+        ctx.translate(shipX, shipY);
+        ctx.rotate(-0.08);
+        const thrustGrad = ctx.createLinearGradient(-78, 0, 0, 0);
+        thrustGrad.addColorStop(0, 'rgba(56, 189, 248, 0)');
+        thrustGrad.addColorStop(0.7, 'rgba(56, 189, 248, 0.55)');
+        thrustGrad.addColorStop(1, 'rgba(224, 242, 254, 0.95)');
+        ctx.fillStyle = thrustGrad;
+        ctx.beginPath();
+        ctx.moveTo(-78, -2); ctx.lineTo(0, -5); ctx.lineTo(0, 5); ctx.lineTo(-78, 2);
+        ctx.closePath();
+        ctx.fill();
+        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = '#94a3b8';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(42, 0); ctx.lineTo(6, -10); ctx.lineTo(-18, -7); ctx.lineTo(-14, 7); ctx.lineTo(10, 8);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+
+        // 2.39:1 宽银幕上下黑边
+        ctx.fillStyle = '#020203';
+        ctx.fillRect(0, 0, w, barH);
+        ctx.fillRect(0, h - barH, w, barH);
+
+        // 放映制式水印
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.35)';
+        ctx.font = '600 13px "Inter", sans-serif';
+        ctx.textAlign = 'right';
+        const formatTag = preset.id === 'imax' ? 'IMAX 1.90:1 EXPANDED' : (preset.id === 'dolby' ? 'DOLBY VISION · ATMOS' : '2.39:1 SCOPE · 4K LASER');
+        ctx.fillText(formatTag, w - 28, viewY + 26);
+
+        // 动态中英双语字幕
+        const sub = MOVIE_SUBTITLES[Math.floor(t / 5.0) % MOVIE_SUBTITLES.length];
+        const subBaseY = viewY + viewH - 28;
+        ctx.save();
+        ctx.textAlign = 'center';
+        ctx.shadowColor = 'rgba(0, 0, 0, 0.95)';
+        ctx.shadowBlur = 10;
+        ctx.shadowOffsetY = 2;
+        ctx.font = '600 28px "PingFang SC", "Microsoft YaHei", sans-serif';
+        ctx.fillStyle = '#fefefe';
+        ctx.fillText(sub.zh, w / 2, subBaseY - 24);
+        ctx.font = '500 17px "Inter", sans-serif';
+        ctx.fillStyle = 'rgba(235, 238, 245, 0.9)';
+        ctx.fillText(sub.en, w / 2, subBaseY + 2);
+        ctx.restore();
+
+        const pulse = 0.5 + 0.5 * Math.sin(t * 0.45);
+        targetBounceColor.setRGB(0.22 + pulse * 0.16, 0.32 + pulse * 0.12, 0.55 - pulse * 0.12);
+        screenTexture.needsUpdate = true;
+      }
+
+      function renderTHXCalibrationScreen() {
+        const ctx = screenCtx;
+        const w = screenCanvas.width;
+        const h = screenCanvas.height;
+
+        ctx.fillStyle = '#0d111a';
+        ctx.fillRect(0, 0, w, h);
+
+        const cols = 24, rows = 12;
+        const stepX = w / cols, stepY = h / rows;
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
+        ctx.lineWidth = 1;
+        for (let i = 0; i <= cols; i++) {
+          ctx.beginPath(); ctx.moveTo(i * stepX, 0); ctx.lineTo(i * stepX, h); ctx.stroke();
+        }
+        for (let j = 0; j <= rows; j++) {
+          ctx.beginPath(); ctx.moveTo(0, j * stepY); ctx.lineTo(w, j * stepY); ctx.stroke();
+        }
+
+        // 外框与 2.39:1 / 1.85:1 安全框
+        ctx.strokeStyle = '#38bdf8';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(4, 4, w - 8, h - 8);
+
+        ctx.strokeStyle = 'rgba(245, 196, 81, 0.65)';
+        ctx.setLineDash([10, 8]);
+        ctx.lineWidth = 2;
+        ctx.strokeRect(w * 0.05, h * 0.05, w * 0.9, h * 0.9);
+        ctx.setLineDash([]);
+
+        // 同心圆畸变检测
+        const cx = w / 2, cy = h / 2, maxR = h * 0.42;
+        [1, 0.7, 0.4, 0.16].forEach((scale, idx) => {
+          ctx.strokeStyle = idx === 0 ? '#f5c451' : 'rgba(226, 232, 240, 0.55)';
+          ctx.lineWidth = idx === 0 ? 3 : 1.5;
+          ctx.beginPath(); ctx.arc(cx, cy, maxR * scale, 0, Math.PI * 2); ctx.stroke();
+        });
+
+        const cornerR = h * 0.11;
+        ctx.strokeStyle = 'rgba(56, 189, 248, 0.75)';
+        ctx.lineWidth = 2;
+        [[w * 0.12, h * 0.18], [w * 0.88, h * 0.18], [w * 0.12, h * 0.82], [w * 0.88, h * 0.82]].forEach(([x, y]) => {
+          ctx.beginPath(); ctx.arc(x, y, cornerR, 0, Math.PI * 2); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(x - cornerR, y); ctx.lineTo(x + cornerR, y);
+          ctx.moveTo(x, y - cornerR); ctx.lineTo(x, y + cornerR); ctx.stroke();
+        });
+
+        // 中心红十字准星
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2.5;
+        ctx.beginPath();
+        ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+        ctx.moveTo(cx, 0); ctx.lineTo(cx, h);
+        ctx.stroke();
+
+        ctx.fillStyle = 'rgba(10, 14, 24, 0.9)';
+        ctx.fillRect(cx - 210, cy - 42, 420, 84);
+        ctx.strokeStyle = '#f5c451';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(cx - 210, cy - 42, 420, 84);
+
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#f5c451';
+        ctx.font = '700 26px "Inter", "PingFang SC", sans-serif';
+        ctx.fillText('THX / SMPTE 视角校准测试图', cx, cy - 6);
+        ctx.fillStyle = '#cbd5e1';
+        ctx.font = '500 15px "Inter", "PingFang SC", sans-serif';
+        ctx.fillText('观察圆弧变形与边角齐平度，直观评估透视畸变', cx, cy + 24);
+
+        ctx.fillStyle = '#38bdf8';
+        ctx.font = '700 16px "PingFang SC", sans-serif';
+        ctx.fillText('▲ 银幕顶部 (检测抬头仰角)', cx, 34);
+        ctx.fillText('▼ 银幕底部 (字幕阅读基准区)', cx, h - 18);
+
+        targetBounceColor.setRGB(0.26, 0.36, 0.48);
+        screenTexture.needsUpdate = true;
+      }
+
+      function renderCustomImageScreen() {
+        const ctx = screenCtx;
+        const w = screenCanvas.width;
+        const h = screenCanvas.height;
+
+        ctx.fillStyle = '#050609';
+        ctx.fillRect(0, 0, w, h);
+
+        if (!state.customImageObj) {
+          ctx.strokeStyle = 'rgba(245, 196, 81, 0.4)';
+          ctx.setLineDash([12, 8]);
+          ctx.lineWidth = 3;
+          ctx.strokeRect(60, 50, w - 120, h - 100);
+          ctx.setLineDash([]);
+          ctx.fillStyle = '#e5e7eb';
+          ctx.textAlign = 'center';
+          ctx.font = '600 32px "PingFang SC", sans-serif';
+          ctx.fillText('请选择本地图片投射至银幕', w / 2, h / 2 - 12);
+          ctx.fillStyle = '#9ca3af';
+          ctx.font = '400 18px "PingFang SC", sans-serif';
+          ctx.fillText('支持 JPG / PNG / WebP 剧照实时预览效果', w / 2, h / 2 + 28);
+          targetBounceColor.setRGB(0.2, 0.22, 0.28);
+          screenTexture.needsUpdate = true;
+          return;
+        }
+
+        const img = state.customImageObj;
+        const imgAspect = img.width / img.height;
+        const canvasAspect = w / h;
+        let drawW, drawH, drawX, drawY;
+        if (imgAspect > canvasAspect) {
+          drawW = w; drawH = w / imgAspect; drawX = 0; drawY = (h - drawH) / 2;
+        } else {
+          drawH = h; drawW = h * imgAspect; drawX = (w - drawW) / 2; drawY = 0;
+        }
+        ctx.drawImage(img, drawX, drawY, drawW, drawH);
+
+        try {
+          const sample = ctx.getImageData(w * 0.25, h * 0.25, 16, 16).data;
+          let r = 0, g = 0, b = 0, cnt = 0;
+          for (let i = 0; i < sample.length; i += 4) {
+            r += sample[i]; g += sample[i + 1]; b += sample[i + 2]; cnt++;
+          }
+          targetBounceColor.setRGB(
+            Math.max(0.12, (r / cnt / 255) * 0.85),
+            Math.max(0.12, (g / cnt / 255) * 0.85),
+            Math.max(0.12, (b / cnt / 255) * 0.85)
+          );
+        } catch (e) {
+          targetBounceColor.setRGB(0.35, 0.35, 0.42);
+        }
+        screenTexture.needsUpdate = true;
+      }
+
+      // =========================================================================
+      // 7. 智能相机 FOV 校准与平滑水平/垂直视口偏移 (适配超宽手机横屏)
+      // =========================================================================
+      function getCalibratedVerticalFOV(w, h) {
+        const aspect = w / Math.max(1, h);
+        if (state.viewMode === 'overview') {
+          if (aspect < 0.8) return 57;
+          if (aspect > 1.85) return 47;
+          return 51;
+        }
+        // 第一人称 FOV 随画幅平滑校准：
+        // 竖屏窄视口 ~58°~62°，桌面标准 ~52°~54°，超宽短横屏 (>1.75) 校准至 ~45°~48°
+        // 让银幕在超宽手机横屏中饱满自然、无鱼眼畸变，同时不影响真实物理光学指标计算
+        if (aspect <= 0.72) return 61;
+        if (aspect <= 1.0) return 61 - ((aspect - 0.72) / 0.28) * 3;    // 61° -> 58°
+        if (aspect <= 1.5) return 58 - ((aspect - 1.0) / 0.5) * 5;      // 58° -> 53°
+        if (aspect <= 1.75) return 53 - ((aspect - 1.5) / 0.25) * 4;    // 53° -> 49°
+        if (aspect <= 2.25) return 49 - ((aspect - 1.75) / 0.5) * 4;    // 49° -> 45°
+        return 45;
+      }
+
+      function computeTargetViewOffset() {
+        const { w, h } = getViewportSize();
+        viewOffsetAnim.viewW = w;
+        viewOffsetAnim.viewH = h;
+
+        if (!state.activeDrawer || state.pureMode) {
+          viewOffsetAnim.targetX = 0;
+          viewOffsetAnim.targetY = 0;
+          return;
+        }
+
+        if (state.layoutMode === 'mobile-landscape') {
+          // 右侧抽屉滑出：正 X 偏移将 3D 银幕平滑居中至左侧未被遮挡的可见区
+          const drawerW = dom.landscapeDrawer.offsetWidth || clamp(w * 0.44, 280, 370);
+          viewOffsetAnim.targetX = Math.round(drawerW * 0.48);
+          viewOffsetAnim.targetY = 0;
+        } else if (state.layoutMode === 'mobile-portrait') {
+          // 底部抽屉滑出：正 Y 偏移将 3D 银幕平滑居中至上方未被遮挡的可见区
+          const sheetH = dom.portraitSheet.offsetHeight || Math.round(h * 0.56);
+          viewOffsetAnim.targetX = 0;
+          viewOffsetAnim.targetY = Math.round(sheetH * 0.44);
+        } else {
+          viewOffsetAnim.targetX = 0;
+          viewOffsetAnim.targetY = 0;
+        }
+      }
+
+      function syncCameraViewport(instantOffset = false) {
+        if (!camera || !renderer) return;
+        const { w, h } = getViewportSize();
+        viewOffsetAnim.viewW = w;
+        viewOffsetAnim.viewH = h;
+
+        camera.aspect = w / Math.max(1, h);
+        camera.fov = getCalibratedVerticalFOV(w, h);
+        computeTargetViewOffset();
+
+        if (instantOffset) {
+          viewOffsetAnim.curX = viewOffsetAnim.targetX;
+          viewOffsetAnim.curY = viewOffsetAnim.targetY;
+        }
+
+        applyCameraViewOffset(true);
+        renderer.setSize(w, h, false);
+      }
+
+      function applyCameraViewOffset(force = false) {
+        if (!camera) return;
+        const dx = Math.abs(viewOffsetAnim.curX - viewOffsetAnim.lastAppliedX);
+        const dy = Math.abs(viewOffsetAnim.curY - viewOffsetAnim.lastAppliedY);
+        if (!force && dx < 0.25 && dy < 0.25) return;
+
+        const w = viewOffsetAnim.viewW;
+        const h = viewOffsetAnim.viewH;
+        if (Math.abs(viewOffsetAnim.curX) < 0.5 && Math.abs(viewOffsetAnim.curY) < 0.5) {
+          camera.clearViewOffset();
+        } else {
+          camera.setViewOffset(w, h, viewOffsetAnim.curX, viewOffsetAnim.curY, w, h);
+        }
+        camera.updateProjectionMatrix();
+        viewOffsetAnim.lastAppliedX = viewOffsetAnim.curX;
+        viewOffsetAnim.lastAppliedY = viewOffsetAnim.curY;
+      }
+
+      // =========================================================================
+      // 8. Three.js 场景构建、资源释放与 WebGL 上下文自愈
+      // =========================================================================
+      function disposeGroup(group) {
+        if (!group) return;
+        group.traverse(obj => {
+          if (obj.geometry) obj.geometry.dispose();
+          if (obj.material) {
+            if (Array.isArray(obj.material)) {
+              obj.material.forEach(m => { if (m && m !== screenTexture) m.dispose(); });
+            } else if (obj.material !== screenTexture) {
+              obj.material.dispose();
+            }
+          }
+        });
+        if (scene) scene.remove(group);
+      }
+
+      function initThreeEngine() {
+        if (rafId) {
+          cancelAnimationFrame(rafId);
+          rafId = null;
+        }
+        if (theaterGroup) {
+          disposeGroup(theaterGroup);
+          theaterGroup = null;
+        }
+        if (renderer) {
+          try { renderer.dispose(); } catch (e) {}
+          if (renderer.domElement && renderer.domElement.parentNode) {
+            renderer.domElement.parentNode.removeChild(renderer.domElement);
+          }
+          renderer = null;
+        }
+
+        if (!currentBounceColor) currentBounceColor = new THREE.Color(0x3a64a8);
+        if (!targetBounceColor) targetBounceColor = new THREE.Color(0x3a64a8);
+        if (!camCtrl) {
+          camCtrl = {
+            fpPos: new THREE.Vector3(0, 3, 10),
+            fpTargetPos: new THREE.Vector3(0, 3, 10),
+            fpYaw: 0, fpPitch: 0,
+            fpTargetYaw: 0, fpTargetPitch: 0,
+            fpDefaultYaw: 0, fpDefaultPitch: 0,
+            orbitTarget: new THREE.Vector3(0, 2.5, 8),
+            orbitTheta: 0.45, orbitPhi: 1.05, orbitRadius: 18,
+            orbitTargetTheta: 0.45, orbitTargetPhi: 1.05, orbitTargetRadius: 18,
+            currentPos: new THREE.Vector3(0, 3, 10),
+            currentLookAt: new THREE.Vector3(0, 4, 0)
+          };
+        }
+
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x05070c);
+        scene.fog = new THREE.FogExp2(0x05070c, 0.0135);
+
+        const { w, h } = getViewportSize();
+        camera = new THREE.PerspectiveCamera(getCalibratedVerticalFOV(w, h), w / Math.max(1, h), 0.1, 130);
+
+        renderer = new THREE.WebGLRenderer({
+          antialias: true,
+          powerPreference: 'high-performance',
+          failIfMajorPerformanceCaveat: false
+        });
+        renderer.setSize(w, h, false);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.06;
+        renderer.outputEncoding = THREE.sRGBEncoding;
+
+        dom.canvasContainer.innerHTML = '';
+        dom.canvasContainer.appendChild(renderer.domElement);
+
+        // WebGL 图形上下文断开 / 自动恢复监听
+        renderer.domElement.addEventListener('webglcontextlost', (e) => {
+          e.preventDefault();
+          if (rafId) {
+            cancelAnimationFrame(rafId);
+            rafId = null;
+          }
+          showErrorOverlay(
+            'WebGL 图形上下文已中断',
+            '移动端休眠切回或系统显存回收导致画布中断，点击「刷新重试」即可就地恢复。'
+          );
+        }, false);
+
+        renderer.domElement.addEventListener('webglcontextrestored', () => {
+          hideErrorOverlay();
+          rebuild3DEngine(true);
+          showToast('3D 图形上下文已自动恢复');
+        }, false);
+
+        raycaster = new THREE.Raycaster();
+        ambientLight = new THREE.AmbientLight(0x1f2536, 0.36);
+        scene.add(ambientLight);
+
+        initScreenCanvas();
+      }
+
+      function createAcousticTexture(baseHex, ribHex) {
+        const c = document.createElement('canvas');
+        c.width = 128; c.height = 128;
+        const ctx = c.getContext('2d');
+        ctx.fillStyle = baseHex;
+        ctx.fillRect(0, 0, 128, 128);
+        ctx.fillStyle = ribHex;
+        for (let x = 0; x < 128; x += 16) ctx.fillRect(x, 0, 4, 128);
+        const tex = new THREE.CanvasTexture(c);
+        tex.wrapS = THREE.RepeatWrapping;
+        tex.wrapT = THREE.RepeatWrapping;
+        tex.repeat.set(14, 4);
+        return tex;
+      }
+
+      function buildTheater(presetKey) {
+        disposeGroup(theaterGroup);
+        theaterGroup = new THREE.Group();
+        scene.add(theaterGroup);
+
+        houseLights = [];
+        screenBounceLights = [];
+        ceilingBulbMats = [];
+        wallSconceMats = [];
+
+        const preset = HALL_PRESETS[presetKey];
+        const colXs = computeColPositions(preset);
+        const lastRow = getRowCoords(preset, preset.rows - 1);
+
+        const seatsSpanX = (colXs[colXs.length - 1] - colXs[0]) + preset.seatSpacing * 2.2;
+        const hallWidth = Math.max(preset.screenWidth + 3.2, seatsSpanX + 3.0);
+        const hallDepth = lastRow.z + 3.2;
+        const screenTopY = preset.screenBottomY + preset.screenHeight;
+        const hallHeight = Math.max(screenTopY + preset.ceilingHeightExtra, lastRow.floorY + 5.2);
+
+        // 1. 电影银幕 (支持平面 / IMAX 微曲面)
+        const screenGeo = new THREE.PlaneGeometry(preset.screenWidth, preset.screenHeight, 36, 1);
+        if (preset.screenCurve > 0) {
+          const posAttr = screenGeo.attributes.position;
+          const halfW = preset.screenWidth / 2;
+          for (let i = 0; i < posAttr.count; i++) {
+            const norm = posAttr.getX(i) / halfW;
+            posAttr.setZ(i, preset.screenCurve * (norm * norm));
+          }
+          screenGeo.computeVertexNormals();
+        }
+        const screenMesh = new THREE.Mesh(screenGeo, new THREE.MeshBasicMaterial({ map: screenTexture }));
+        screenMesh.position.set(0, preset.screenBottomY + preset.screenHeight / 2, 0.02);
+        theaterGroup.add(screenMesh);
+
+        // 吸光黑色天鹅绒边框
+        const framePad = 0.55;
+        const frameGeo = new THREE.PlaneGeometry(preset.screenWidth + framePad * 2, preset.screenHeight + framePad * 2, 36, 1);
+        if (preset.screenCurve > 0) {
+          const posAttr = frameGeo.attributes.position;
+          const halfW = (preset.screenWidth + framePad * 2) / 2;
+          for (let i = 0; i < posAttr.count; i++) {
+            const norm = posAttr.getX(i) / halfW;
+            posAttr.setZ(i, preset.screenCurve * 1.04 * (norm * norm) - 0.08);
+          }
+          frameGeo.computeVertexNormals();
+        }
+        const blackVelvetMat = new THREE.MeshStandardMaterial({ color: 0x050507, roughness: 0.96, metalness: 0.02 });
+        const frameMesh = new THREE.Mesh(frameGeo, blackVelvetMat);
+        frameMesh.position.set(0, preset.screenBottomY + preset.screenHeight / 2, -0.02);
+        theaterGroup.add(frameMesh);
+
+        // IMAX 标志性蓝色边缘轮廓氛围灯条
+        if (preset.isIMAX) {
+          const imaxRimMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.72 });
+          [-1, 1].forEach(side => {
+            const rim = new THREE.Mesh(new THREE.BoxGeometry(0.08, preset.screenHeight + 0.8, 0.08), imaxRimMat);
+            rim.position.set(side * (preset.screenWidth / 2 + 0.55), preset.screenBottomY + preset.screenHeight / 2, preset.screenCurve + 0.04);
+            theaterGroup.add(rim);
+          });
+        }
+
+        // 前台地台
+        const carpetMat = new THREE.MeshStandardMaterial({ color: 0x15151e, roughness: 0.92, metalness: 0.05 });
+        const stageHeight = Math.max(0.35, preset.screenBottomY * 0.35);
+        const stageMesh = new THREE.Mesh(new THREE.BoxGeometry(hallWidth, stageHeight, 2.2), carpetMat);
+        stageMesh.position.set(0, stageHeight / 2, 0.9);
+        theaterGroup.add(stageMesh);
+
+        // 2. 银幕漫反射环境光
+        [
+          [-preset.screenWidth * 0.28, preset.screenBottomY + preset.screenHeight * 0.5, 2.2],
+          [0, preset.screenBottomY + preset.screenHeight * 0.5, 2.6],
+          [preset.screenWidth * 0.28, preset.screenBottomY + preset.screenHeight * 0.5, 2.2]
+        ].forEach(([bx, by, bz], idx) => {
+          const pt = new THREE.PointLight(0x4b77be, idx === 1 ? 1.55 : 0.95, hallDepth * 1.25, 1.45);
+          pt.position.set(bx, by, bz);
+          theaterGroup.add(pt);
+          screenBounceLights.push(pt);
+        });
+
+        // 3. 阶梯与过道 LED 引导灯
+        const baseFloor = new THREE.Mesh(new THREE.PlaneGeometry(hallWidth, hallDepth + 2), carpetMat);
+        baseFloor.rotation.x = -Math.PI / 2;
+        baseFloor.position.set(0, 0, hallDepth / 2);
+        theaterGroup.add(baseFloor);
+
+        const stepMat = new THREE.MeshStandardMaterial({ color: 0x1a1926, roughness: 0.9, metalness: 0.05 });
+        const ledMat = new THREE.MeshBasicMaterial({ color: (preset.isDolby || preset.isIMAX) ? 0x38bdf8 : 0xffb347 });
+        const aisleCenters = preset.aisles.map(cIdx => (colXs[cIdx - 1] + colXs[cIdx]) / 2);
+
+        for (let r = 0; r < preset.rows; r++) {
+          const { z, floorY } = getRowCoords(preset, r);
+          const riserH = Math.max(0.08, floorY + 0.06);
+          const depth = r === preset.rows - 1 ? 3.5 : preset.rowSpacing + 0.06;
+          const stepMesh = new THREE.Mesh(new THREE.BoxGeometry(hallWidth, riserH, depth), stepMat);
+          const zOffset = r === preset.rows - 1 ? (depth / 2 - preset.rowSpacing * 0.48) : 0;
+          stepMesh.position.set(0, riserH / 2 - 0.04, z + zOffset);
+          theaterGroup.add(stepMesh);
+
+          aisleCenters.forEach(ax => {
+            const strip = new THREE.Mesh(new THREE.BoxGeometry(preset.aisleWidth * 0.72, 0.025, 0.04), ledMat);
+            strip.position.set(ax, floorY + 0.02, z - preset.rowSpacing * 0.48);
+            theaterGroup.add(strip);
+            [-1, 1].forEach(side => {
+              const dot = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.02, preset.rowSpacing * 0.7), ledMat);
+              dot.position.set(ax + side * (preset.aisleWidth * 0.36), floorY + 0.018, z);
+              theaterGroup.add(dot);
+            });
+          });
+        }
+
+        // 4. 声学墙面、氛围壁灯、放映室光束与自动隐藏天花板
+        const acousticTex = createAcousticTexture(
+          preset.isDolby ? '#080a10' : '#151621',
+          preset.isDolby ? '#111626' : '#202231'
+        );
+        const wallMat = new THREE.MeshStandardMaterial({ map: acousticTex, roughness: 0.88, metalness: 0.08 });
+
+        const frontWall = new THREE.Mesh(new THREE.PlaneGeometry(hallWidth, hallHeight), blackVelvetMat);
+        frontWall.position.set(0, hallHeight / 2, -0.35);
+        theaterGroup.add(frontWall);
+
+        const backWall = new THREE.Mesh(new THREE.PlaneGeometry(hallWidth, hallHeight), wallMat);
+        backWall.rotation.y = Math.PI;
+        backWall.position.set(0, hallHeight / 2, hallDepth);
+        theaterGroup.add(backWall);
+
+        const boothY = Math.min(hallHeight - 1.1, lastRow.floorY + 2.6);
+        const boothFrame = new THREE.Mesh(
+          new THREE.BoxGeometry(2.4, 0.9, 0.15),
+          new THREE.MeshStandardMaterial({ color: 0x09090b, roughness: 0.4, metalness: 0.6 })
+        );
+        boothFrame.position.set(0, boothY, hallDepth - 0.05);
+        theaterGroup.add(boothFrame);
+
+        const boothLens = new THREE.Mesh(new THREE.CircleGeometry(0.2, 20), new THREE.MeshBasicMaterial({ color: 0xe0f2fe }));
+        boothLens.rotation.y = Math.PI;
+        boothLens.position.set(0, boothY, hallDepth - 0.14);
+        theaterGroup.add(boothLens);
+
+        const beamOrigin = new THREE.Vector3(0, boothY, hallDepth - 0.2);
+        const beamTarget = new THREE.Vector3(0, preset.screenBottomY + preset.screenHeight * 0.52, 0.3);
+        const beamLen = beamOrigin.distanceTo(beamTarget);
+        const beamGeo = new THREE.ConeGeometry(preset.screenWidth * 0.36, beamLen, 24, 1, true);
+        beamGeo.translate(0, -beamLen / 2, 0);
+        beamGeo.rotateX(Math.PI / 2);
+        projectorBeamMesh = new THREE.Mesh(beamGeo, new THREE.MeshBasicMaterial({
+          color: 0x93c5fd, transparent: true, opacity: 0.032,
+          blending: THREE.AdditiveBlending, side: THREE.DoubleSide, depthWrite: false
+        }));
+        projectorBeamMesh.position.copy(beamOrigin);
+        projectorBeamMesh.lookAt(beamTarget);
+        theaterGroup.add(projectorBeamMesh);
+
+        [-1, 1].forEach(side => {
+          const wallX = side * (hallWidth / 2);
+          const sideWall = new THREE.Mesh(new THREE.PlaneGeometry(hallDepth + 0.5, hallHeight), wallMat);
+          sideWall.rotation.y = side === -1 ? Math.PI / 2 : -Math.PI / 2;
+          sideWall.position.set(wallX, hallHeight / 2, hallDepth / 2);
+          theaterGroup.add(sideWall);
+
+          const panelCount = 6;
+          for (let i = 0; i < panelCount; i++) {
+            const pz = 2.6 + (i / (panelCount - 1)) * (hallDepth - 4.4);
+            const rib = new THREE.Mesh(
+              new THREE.BoxGeometry(0.18, hallHeight * 0.84, 0.95),
+              new THREE.MeshStandardMaterial({ color: preset.isDolby ? 0x0d1019 : 0x1d1f2d, roughness: 0.85, metalness: 0.1 })
+            );
+            rib.position.set(wallX - side * 0.09, hallHeight * 0.5, pz);
+            theaterGroup.add(rib);
+
+            const sconceMat = new THREE.MeshBasicMaterial({ color: preset.sconceColor });
+            wallSconceMats.push(sconceMat);
+            const sconceH = preset.isDolby ? hallHeight * 0.65 : (preset.isIMAX ? hallHeight * 0.42 : 0.72);
+            const sconce = new THREE.Mesh(new THREE.BoxGeometry(0.06, sconceH, 0.08), sconceMat);
+            const sconceY = preset.isDolby ? hallHeight * 0.52 : (hallHeight * 0.56 + i * 0.22);
+            sconce.position.set(wallX - side * 0.2, Math.min(hallHeight - 1.2, sconceY), pz);
+            theaterGroup.add(sconce);
+          }
+
+          const exitSign = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.16, 0.05), new THREE.MeshBasicMaterial({ color: 0x10b981 }));
+          exitSign.position.set(side * (hallWidth / 2 - 0.8), 2.3, 0.08);
+          theaterGroup.add(exitSign);
+        });
+
+        ceilingMeshGroup = new THREE.Group();
+        const ceilingPlane = new THREE.Mesh(
+          new THREE.PlaneGeometry(hallWidth, hallDepth + 0.5),
+          new THREE.MeshStandardMaterial({ color: 0x090b11, roughness: 0.92 })
+        );
+        ceilingPlane.rotation.x = Math.PI / 2;
+        ceilingPlane.position.set(0, hallHeight, hallDepth / 2);
+        ceilingMeshGroup.add(ceilingPlane);
+
+        for (let b = 0; b < 4; b++) {
+          const bz = 3.2 + (b / 3) * (hallDepth - 5.2);
+          const cBeam = new THREE.Mesh(
+            new THREE.BoxGeometry(hallWidth, 0.28, 0.35),
+            new THREE.MeshStandardMaterial({ color: 0x12141e, roughness: 0.85 })
+          );
+          cBeam.position.set(0, hallHeight - 0.14, bz);
+          ceilingMeshGroup.add(cBeam);
+
+          [-0.28, 0.28].forEach(xf => {
+            const bulbMat = new THREE.MeshBasicMaterial({ color: 0x2e2a20 });
+            ceilingBulbMats.push(bulbMat);
+            const bulb = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.18, 0.06, 16), bulbMat);
+            bulb.position.set(hallWidth * xf, hallHeight - 0.3, bz);
+            ceilingMeshGroup.add(bulb);
+          });
+
+          const hLight = new THREE.PointLight(preset.isDolby ? 0xdbeafe : 0xffe4b5, 0.0, hallWidth * 1.4, 1.4);
+          hLight.position.set(0, hallHeight - 0.8, bz);
+          theaterGroup.add(hLight);
+          houseLights.push(hLight);
+        }
+        theaterGroup.add(ceilingMeshGroup);
+
+        // 5. 座椅集群 (InstancedMesh)
+        const totalSeats = preset.rows * preset.cols;
+        const seatW = preset.recliner ? 0.68 : 0.51;
+        const cushionMat = new THREE.MeshStandardMaterial({
+          color: preset.seatColor,
+          roughness: preset.recliner ? 0.42 : 0.78,
+          metalness: preset.recliner ? 0.15 : 0.06
+        });
+        const darkLeatherMat = new THREE.MeshStandardMaterial({
+          color: preset.recliner ? 0x241818 : 0x16171f,
+          roughness: 0.48,
+          metalness: 0.2
+        });
+
+        const cushionMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(seatW, preset.recliner ? 0.18 : 0.14, preset.recliner ? 0.56 : 0.48), cushionMat, totalSeats);
+        const backMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(seatW, preset.recliner ? 0.74 : 0.68, preset.recliner ? 0.18 : 0.13), cushionMat, totalSeats);
+        const headPadMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(seatW * 0.86, 0.19, 0.16), darkLeatherMat, totalSeats);
+        const leftArmMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(preset.recliner ? 0.12 : 0.075, preset.recliner ? 0.12 : 0.08, preset.recliner ? 0.54 : 0.44), darkLeatherMat, totalSeats);
+        const rightArmMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(preset.recliner ? 0.12 : 0.075, preset.recliner ? 0.12 : 0.08, preset.recliner ? 0.54 : 0.44), darkLeatherMat, totalSeats);
+        const baseMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(seatW * 0.72, 0.36, 0.32), darkLeatherMat, totalSeats);
+
+        const seatParts = [cushionMesh, backMesh, headPadMesh, leftArmMesh, rightArmMesh, baseMesh];
+        seatParts.forEach(m => { m.frustumCulled = false; });
+
+        const dummy = new THREE.Object3D();
+        state.seatsData.forEach((seat, idx) => {
+          const tilt = preset.recliner ? 0.25 : 0.17;
+          dummy.position.set(seat.x, seat.floorY + 0.40, seat.z + 0.02);
+          dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+          cushionMesh.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(seat.x, seat.floorY + 0.73, seat.z + 0.25);
+          dummy.rotation.set(tilt, 0, 0); dummy.updateMatrix();
+          backMesh.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(seat.x, seat.floorY + 1.05, seat.z + 0.30);
+          dummy.rotation.set(tilt, 0, 0); dummy.updateMatrix();
+          headPadMesh.setMatrixAt(idx, dummy.matrix);
+
+          const armOff = seatW / 2 + (preset.recliner ? 0.05 : 0.03);
+          dummy.position.set(seat.x - armOff, seat.floorY + 0.56, seat.z + 0.05);
+          dummy.rotation.set(0, 0, 0); dummy.updateMatrix();
+          leftArmMesh.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(seat.x + armOff, seat.floorY + 0.56, seat.z + 0.05);
+          dummy.updateMatrix();
+          rightArmMesh.setMatrixAt(idx, dummy.matrix);
+
+          dummy.position.set(seat.x, seat.floorY + 0.18, seat.z + 0.08);
+          dummy.updateMatrix();
+          baseMesh.setMatrixAt(idx, dummy.matrix);
+        });
+
+        seatParts.forEach(m => { m.instanceMatrix.needsUpdate = true; theaterGroup.add(m); });
+        seatPickMesh = backMesh;
+
+        // 6. 模拟前排观众剪影
+        const silhouetteMat = new THREE.MeshStandardMaterial({ color: 0x14161e, roughness: 0.9, metalness: 0.05 });
+        audienceTorsoMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.17, 0.21, 0.48, 12), silhouetteMat, totalSeats);
+        audienceHeadMesh = new THREE.InstancedMesh(new THREE.SphereGeometry(0.115, 14, 12), silhouetteMat, totalSeats);
+        audienceTorsoMesh.frustumCulled = false;
+        audienceHeadMesh.frustumCulled = false;
+
+        audienceSeedMask = [];
+        audienceHeightOffsets = [];
+        for (let i = 0; i < totalSeats; i++) {
+          const hash = Math.sin(i * 12.9898 + 78.233) * 43758.5453;
+          const frac = hash - Math.floor(hash);
+          audienceSeedMask.push(frac < 0.72);
+          audienceHeightOffsets.push((frac - 0.5) * 0.14);
+        }
+        theaterGroup.add(audienceTorsoMesh);
+        theaterGroup.add(audienceHeadMesh);
+        updateAudienceMeshes();
+
+        // 7. 选中座椅金色光柱标记
+        selectionBeaconGroup = new THREE.Group();
+        const ringGeo = new THREE.RingGeometry(0.38, 0.48, 4);
+        ringGeo.rotateX(-Math.PI / 2);
+        ringGeo.rotateY(Math.PI / 4);
+        const ringMesh = new THREE.Mesh(ringGeo, new THREE.MeshBasicMaterial({ color: 0xf5c451, side: THREE.DoubleSide }));
+        ringMesh.position.y = 0.05;
+        selectionBeaconGroup.add(ringMesh);
+
+        const pillarMesh = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.32, 0.38, 2.4, 16, 1, true),
+          new THREE.MeshBasicMaterial({
+            color: 0xf5c451, transparent: true, opacity: 0.24,
+            side: THREE.DoubleSide, blending: THREE.AdditiveBlending, depthWrite: false
+          })
+        );
+        pillarMesh.position.y = 1.25;
+        selectionBeaconGroup.add(pillarMesh);
+
+        const diamondMesh = new THREE.Mesh(new THREE.OctahedronGeometry(0.16, 0), new THREE.MeshBasicMaterial({ color: 0xfde047 }));
+        diamondMesh.name = 'beaconDiamond';
+        diamondMesh.position.y = 2.05;
+        selectionBeaconGroup.add(diamondMesh);
+        theaterGroup.add(selectionBeaconGroup);
+
+        // 8. 全景悬停线框
+        hoverOutlineMesh = new THREE.Mesh(
+          new THREE.BoxGeometry(seatW + 0.08, 0.82, 0.56),
+          new THREE.MeshBasicMaterial({ color: 0x38bdf8, wireframe: true, transparent: true, opacity: 0.85 })
+        );
+        hoverOutlineMesh.visible = false;
+        theaterGroup.add(hoverOutlineMesh);
+
+        camCtrl.orbitTarget.set(0, lastRow.floorY * 0.45 + 1.8, hallDepth * 0.45);
+        camCtrl.orbitTargetRadius = Math.max(hallWidth, hallDepth) * 0.94;
+        camCtrl.orbitRadius = camCtrl.orbitTargetRadius;
+        camCtrl.orbitTargetTheta = 0.42;
+        camCtrl.orbitTargetPhi = 1.08;
+
+        applyHouseLights(state.houseLightsOn, true);
+      }
+
+      function updateAudienceMeshes() {
+        if (!audienceTorsoMesh || !audienceHeadMesh) return;
+        const preset = HALL_PRESETS[state.presetKey];
+        const selectedIdx = state.selectedRow * preset.cols + state.selectedCol;
+        const dummy = new THREE.Object3D();
+
+        state.seatsData.forEach((seat, idx) => {
+          const visible = state.showAudience && audienceSeedMask[idx] && idx !== selectedIdx;
+          if (!visible) {
+            dummy.position.set(0, -50, 0);
+            dummy.scale.set(0.0001, 0.0001, 0.0001);
+            dummy.updateMatrix();
+            audienceTorsoMesh.setMatrixAt(idx, dummy.matrix);
+            audienceHeadMesh.setMatrixAt(idx, dummy.matrix);
+          } else {
+            const hOff = audienceHeightOffsets[idx] || 0;
+            dummy.position.set(seat.x, seat.floorY + 0.72 + hOff * 0.5, seat.z + 0.08);
+            dummy.rotation.set(0.08, 0, 0); dummy.scale.set(1, 1, 1); dummy.updateMatrix();
+            audienceTorsoMesh.setMatrixAt(idx, dummy.matrix);
+
+            dummy.position.set(seat.x, seat.floorY + 1.12 + hOff, seat.z + 0.05);
+            dummy.rotation.set(0, 0, 0); dummy.scale.set(1, 1.14, 1.05); dummy.updateMatrix();
+            audienceHeadMesh.setMatrixAt(idx, dummy.matrix);
+          }
+        });
+        audienceTorsoMesh.instanceMatrix.needsUpdate = true;
+        audienceHeadMesh.instanceMatrix.needsUpdate = true;
+      }
+
+      function applyHouseLights(isOn, silent = false) {
+        state.houseLightsOn = isOn;
+        const preset = HALL_PRESETS[state.presetKey];
+        if (ambientLight) ambientLight.intensity = isOn ? 1.15 : 0.36;
+        houseLights.forEach(l => { l.intensity = isOn ? 1.35 : 0.0; });
+        ceilingBulbMats.forEach(m => { m.color.setHex(isOn ? 0xfff3d1 : 0x24211b); });
+        wallSconceMats.forEach(m => { m.color.setHex(isOn ? (preset.isDolby ? 0x60a5fa : 0xffe4a0) : preset.sconceColor); });
+        if (projectorBeamMesh) projectorBeamMesh.visible = !isOn;
+
+        document.querySelectorAll('.light-icon-sync').forEach(el => { el.textContent = isOn ? '💡' : '🌙'; });
+        document.querySelectorAll('.light-label-sync').forEach(el => { el.textContent = isOn ? '入场照明' : '放映暗场'; });
+
+        if (!silent) showToast(isOn ? '已切换至入场照明模式' : '已切换至放映暗场模式');
+      }
+
+      // =========================================================================
+      // 9. 三态布局模块挂载与抽屉状态无缝衔接引擎
+      // =========================================================================
+      function returnAllModulesToVault() {
+        [dom.modSeatmap, dom.modHallPicker, dom.modEnv, dom.modScreen, dom.modMetrics].forEach(m => {
+          dom.moduleVault.appendChild(m);
+        });
+      }
+
+      function getDrawerMeta(drawerType) {
+        const seat = getSeatData(state.selectedRow, state.selectedCol);
+        const preset = HALL_PRESETS[state.presetKey];
+        if (drawerType === 'seats') {
+          return { icon: '💺', title: '选座平面图', sub: seat ? `${preset.shortName} · ${seat.label}` : '' };
+        }
+        if (drawerType === 'metrics') {
+          return { icon: '📊', title: '光学观影评测', sub: seat ? `${seat.gradeShort} ${seat.score}分` : '' };
+        }
+        return { icon: '🎬', title: '影厅与银幕环境', sub: preset.name };
+      }
+
+      function mountDrawerModules(targetBody, drawerType) {
+        returnAllModulesToVault();
+        targetBody.innerHTML = '';
+
+        if (drawerType === 'seats') {
+          targetBody.appendChild(dom.modSeatmap);
+        } else if (drawerType === 'metrics') {
+          targetBody.appendChild(dom.modMetrics);
+        } else if (drawerType === 'hall') {
+          targetBody.appendChild(dom.modHallPicker);
+          targetBody.appendChild(dom.modScreen);
+          targetBody.appendChild(dom.modEnv);
+        }
+        targetBody.scrollTop = 0;
+      }
+
+      function updateDrawerHeaderMeta() {
+        if (!state.activeDrawer) return;
+        const meta = getDrawerMeta(state.activeDrawer);
+        if (state.layoutMode === 'mobile-portrait') {
+          dom.portSheetIcon.textContent = meta.icon;
+          dom.portSheetTitle.textContent = meta.title;
+          dom.portSheetSubtitle.textContent = meta.sub;
+        } else if (state.layoutMode === 'mobile-landscape') {
+          dom.landDrawerIcon.textContent = meta.icon;
+          dom.landDrawerTitle.textContent = meta.title;
+          dom.landDrawerSubtitle.textContent = meta.sub;
+        }
+      }
+
+      function highlightMobileDockButtons() {
+        document.querySelectorAll('.port-dock-btn, .land-dock-btn').forEach(btn => {
+          const active = btn.dataset.drawer === state.activeDrawer;
+          btn.classList.toggle('bg-white/15', active);
+          btn.classList.toggle('text-amber-300', active);
+        });
+      }
+
+      function openMobileDrawer(drawerType, toggleIfSame = true) {
+        if (!isMobileLayout()) return;
+        if (toggleIfSame && state.activeDrawer === drawerType) {
+          closeMobileDrawer();
+          return;
+        }
+
+        state.activeDrawer = drawerType;
+        const meta = getDrawerMeta(drawerType);
+
+        if (state.layoutMode === 'mobile-portrait') {
+          dom.landscapeDrawer.classList.remove('open');
+          dom.landscapeDock.classList.remove('dock-shifted');
+          dom.portSheetIcon.textContent = meta.icon;
+          dom.portSheetTitle.textContent = meta.title;
+          dom.portSheetSubtitle.textContent = meta.sub;
+          mountDrawerModules(dom.portraitSheetBody, drawerType);
+          dom.portraitSheet.style.transform = '';
+          dom.portraitSheet.classList.add('open');
+        } else if (state.layoutMode === 'mobile-landscape') {
+          dom.portraitSheet.classList.remove('open');
+          dom.landDrawerIcon.textContent = meta.icon;
+          dom.landDrawerTitle.textContent = meta.title;
+          dom.landDrawerSubtitle.textContent = meta.sub;
+          mountDrawerModules(dom.landscapeDrawerBody, drawerType);
+          dom.landscapeDrawer.style.transform = '';
+          dom.landscapeDrawer.classList.add('open');
+          dom.landscapeDock.classList.add('dock-shifted');
+        }
+
+        highlightMobileDockButtons();
+        // 等待布局稳定后更新目标相机视野偏移（随后在 animate 中丝滑过渡）
+        requestAnimationFrame(() => computeTargetViewOffset());
+      }
+
+      function closeMobileDrawer(silent = false) {
+        state.activeDrawer = null;
+        dom.portraitSheet.classList.remove('open', 'dragging');
+        dom.portraitSheet.style.transform = '';
+        dom.landscapeDrawer.classList.remove('open', 'dragging');
+        dom.landscapeDrawer.style.transform = '';
+        dom.landscapeDock.classList.remove('dock-shifted');
+        highlightMobileDockButtons();
+        if (!silent) computeTargetViewOffset();
+      }
+
+      /**
+       * 三态响应式布局同步器：
+       * 在桌面 / 手机竖屏 / 手机横屏切换时，自动迁移模块并保持已打开的抽屉无缝转换形态！
+       */
+      function syncResponsiveLayout(forceRemount = false) {
+        const nextMode = detectLayoutMode();
+        const modeChanged = forceRemount || state.layoutMode !== nextMode;
+
+        state.layoutMode = nextMode;
+        document.documentElement.dataset.layout = nextMode;
+
+        if (modeChanged) {
+          if (nextMode === 'desktop') {
+            closeMobileDrawer(true);
+            returnAllModulesToVault();
+            // 桌面端左侧：选座 + 环境 + 银幕切换；右侧：实时光学观影评测
+            dom.desktopLeftBody.appendChild(dom.modSeatmap);
+            dom.desktopLeftBody.appendChild(dom.modEnv);
+            dom.desktopLeftBody.appendChild(dom.modScreen);
+            dom.desktopRightBody.appendChild(dom.modMetrics);
+            // 同步桌面端收起按钮状态
+            syncDesktopCollapseButtons();
+          } else {
+            // 离开桌面端隐藏桌面展开浮钮
+            dom.btnExpandLeft.classList.add('force-hidden');
+            dom.btnExpandRight.classList.add('force-hidden');
+
+            // 如果之前在另一个移动方向已打开了抽屉（如竖屏打开选座 -> 旋转至横屏），无缝转移到新形态抽屉！
+            if (state.activeDrawer) {
+              openMobileDrawer(state.activeDrawer, false);
+            } else {
+              dom.portraitSheet.classList.remove('open');
+              dom.landscapeDrawer.classList.remove('open');
+              dom.landscapeDock.classList.remove('dock-shifted');
+              returnAllModulesToVault();
+            }
+          }
+          render2DSeatMap();
+        }
+
+        syncCameraViewport(false);
+      }
+
+      function syncDesktopCollapseButtons() {
+        if (state.layoutMode !== 'desktop' || state.pureMode) {
+          dom.btnExpandLeft.classList.add('force-hidden');
+          dom.btnExpandRight.classList.add('force-hidden');
+          return;
+        }
+        dom.desktopLeftPanel.classList.toggle('panel-left-hidden', state.leftCollapsed);
+        dom.btnExpandLeft.classList.toggle('force-hidden', !state.leftCollapsed);
+        dom.btnExpandLeft.classList.toggle('flex', state.leftCollapsed);
+
+        dom.desktopRightPanel.classList.toggle('panel-right-hidden', state.rightCollapsed);
+        dom.btnExpandRight.classList.toggle('force-hidden', !state.rightCollapsed);
+        dom.btnExpandRight.classList.toggle('flex', state.rightCollapsed);
+      }
+
+      // =========================================================================
+      // 10. 选座、视角切换、2D 座位图与 UI 实时同步
+      // =========================================================================
+      function selectSeat(row, col, instant = false) {
+        const preset = HALL_PRESETS[state.presetKey];
+        row = clamp(row, 0, preset.rows - 1);
+        col = clamp(col, 0, preset.cols - 1);
+        state.selectedRow = row;
+        state.selectedCol = col;
+
+        const seat = getSeatData(row, col);
+        if (!seat) return;
+
+        camCtrl.fpTargetPos.set(seat.x, seat.eyeY, seat.z - 0.04);
+        const screenCenter = new THREE.Vector3(0, preset.screenBottomY + preset.screenHeight / 2, 0);
+        const lookVec = screenCenter.clone().sub(camCtrl.fpTargetPos);
+        const horizDist = Math.hypot(lookVec.x, lookVec.z);
+
+        camCtrl.fpDefaultYaw = Math.atan2(-lookVec.x, -lookVec.z);
+        camCtrl.fpDefaultPitch = Math.atan2(lookVec.y, horizDist);
+        camCtrl.fpTargetYaw = camCtrl.fpDefaultYaw;
+        camCtrl.fpTargetPitch = camCtrl.fpDefaultPitch;
+
+        if (instant) {
+          camCtrl.fpPos.copy(camCtrl.fpTargetPos);
+          camCtrl.fpYaw = camCtrl.fpTargetYaw;
+          camCtrl.fpPitch = camCtrl.fpTargetPitch;
+        }
+
+        if (selectionBeaconGroup) {
+          selectionBeaconGroup.position.set(seat.x, seat.floorY, seat.z + 0.04);
+          selectionBeaconGroup.visible = state.viewMode === 'overview';
+        }
+
+        updateAudienceMeshes();
+        updateMetricsUI(seat);
+        updateSeatMapSelection();
+      }
+
+      function setViewMode(mode) {
+        if (state.viewMode === mode) return;
+        state.viewMode = mode;
+
+        syncCameraViewport(false);
+        if (selectionBeaconGroup) selectionBeaconGroup.visible = mode === 'overview';
+        if (hoverOutlineMesh) hoverOutlineMesh.visible = false;
+        dom.tooltip.classList.add('hidden');
+
+        const isFp = mode === 'fp';
+        dom.btnModeFp.className = isFp
+          ? 'px-2.5 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 bg-amber-400 text-gray-950 shadow'
+          : 'px-2.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5 text-gray-300 hover:text-white';
+        dom.btnModeOverview.className = !isFp
+          ? 'px-2.5 py-1.5 rounded-xl text-xs font-semibold transition flex items-center gap-1.5 bg-amber-400 text-gray-950 shadow'
+          : 'px-2.5 py-1.5 rounded-xl text-xs font-medium transition flex items-center gap-1.5 text-gray-300 hover:text-white';
+
+        dom.btnRecenterText.textContent = isFp ? '居中回正' : '重置全景';
+        dom.hintText.textContent = isFp
+          ? '按住拖拽自由环顾影厅 · 方向键快速切座 · 快捷键 R 居中回正'
+          : '拖拽旋转全景 · 滚轮/双指缩放 · 单击 3D 座椅选座 · 双击直接入座';
+        dom.portHeaderViewTag.textContent = isFp ? '第一人称视角' : '3D 全景视角';
+
+        document.querySelectorAll('.mob-view-icon').forEach(el => { el.textContent = isFp ? '🌐' : '👁️'; });
+        document.querySelectorAll('.mob-view-label').forEach(el => { el.textContent = isFp ? '3D 全景' : '第一人称'; });
+        document.querySelectorAll('.mob-view-label-short').forEach(el => { el.textContent = isFp ? '全景' : '入座'; });
+      }
+
+      function updateMetricsUI(seat) {
+        const preset = HALL_PRESETS[state.presetKey];
+        const compactScore = `${seat.gradeShort} ${seat.score}`;
+        const compactSeat = `${preset.shortName} · ${seat.label}`;
+
+        // 同步三端顶栏状态胶囊
+        dom.deskSeatBadge.textContent = seat.label;
+        dom.deskScoreBadge.textContent = compactScore;
+        dom.portHeaderSeat.textContent = compactSeat;
+        dom.portHeaderScore.textContent = compactScore;
+        dom.landHeaderSeat.textContent = compactSeat;
+        dom.landHeaderScore.textContent = compactScore;
+
+        updateDrawerHeaderMeta();
+
+        // 选座模块标题
+        dom.seatmapTitle.textContent = seat.label;
+        dom.seatmapTag.textContent = seat.tag;
+        dom.seatmapTag.className = `px-2 py-0.5 rounded-full text-[10px] font-semibold border whitespace-nowrap ${seat.tagStyle}`;
+
+        // 评测模块详情
+        dom.metricSeatTitle.textContent = seat.label;
+        dom.metricGradeBadge.textContent = seat.gradeText;
+        dom.metricGradeBadge.className = `px-2 py-0.5 rounded-md text-[10px] font-extrabold border ${seat.gradeClass}`;
+        dom.metricSummary.textContent = seat.summary;
+        dom.metricScore.textContent = seat.score;
+
+        const scoreColor = seat.score >= 90 ? 'text-amber-300'
+          : (seat.score >= 78 ? 'text-emerald-300'
+          : (seat.score >= 62 ? 'text-sky-300' : 'text-rose-400'));
+        dom.metricScore.className = `text-2xl font-extrabold font-mono leading-none ${scoreColor}`;
+
+        // HFOV
+        dom.metricHfov.textContent = `${seat.hfov.toFixed(1)}°`;
+        const maxHfov = 85;
+        dom.metricHfovBar.style.width = `${clamp((seat.hfov / maxHfov) * 100, 4, 100)}%`;
+        dom.hfovIdealBand.style.left = `${(preset.idealHfovMin / maxHfov) * 100}%`;
+        dom.hfovIdealBand.style.width = `${((preset.idealHfovMax - preset.idealHfovMin) / maxHfov) * 100}%`;
+        dom.hfovRefLabel.textContent = preset.hfovRefText;
+
+        if (seat.hfov >= preset.idealHfovMin && seat.hfov <= preset.idealHfovMax) {
+          dom.metricHfovStatus.textContent = '黄金区间';
+          dom.metricHfovStatus.className = 'text-[10px] font-medium text-emerald-400';
+          dom.metricHfovBar.className = 'relative h-full bg-emerald-400 rounded-full transition-all duration-300';
+        } else if (seat.hfov < preset.idealHfovMin) {
+          dom.metricHfovStatus.textContent = '略偏小';
+          dom.metricHfovStatus.className = 'text-[10px] font-medium text-sky-400';
+          dom.metricHfovBar.className = 'relative h-full bg-sky-400 rounded-full transition-all duration-300';
+        } else {
+          dom.metricHfovStatus.textContent = '偏大';
+          dom.metricHfovStatus.className = 'text-[10px] font-medium text-rose-400';
+          dom.metricHfovBar.className = 'relative h-full bg-rose-400 rounded-full transition-all duration-300';
+        }
+
+        // 垂直仰角
+        const signC = seat.elevCenter >= 0 ? '+' : '';
+        dom.metricElev.textContent = `${signC}${seat.elevCenter.toFixed(1)}° / ${seat.elevTop.toFixed(1)}°`;
+        dom.metricElevBar.style.width = `${clamp((Math.max(0, seat.elevTop) / 55) * 100, 4, 100)}%`;
+        if (seat.elevTop <= 30) {
+          dom.metricElevStatus.textContent = '非常舒适';
+          dom.metricElevStatus.className = 'text-[10px] font-medium text-emerald-400';
+          dom.metricElevBar.className = 'h-full bg-emerald-400 rounded-full transition-all duration-300';
+        } else if (seat.elevTop <= 36) {
+          dom.metricElevStatus.textContent = '尚可接受';
+          dom.metricElevStatus.className = 'text-[10px] font-medium text-amber-300';
+          dom.metricElevBar.className = 'h-full bg-amber-400 rounded-full transition-all duration-300';
+        } else {
+          dom.metricElevStatus.textContent = '易累脖子';
+          dom.metricElevStatus.className = 'text-[10px] font-medium text-rose-400';
+          dom.metricElevBar.className = 'h-full bg-rose-500 rounded-full transition-all duration-300';
+        }
+
+        // 水平偏心角
+        dom.metricOffaxis.textContent = `${seat.offAxis.toFixed(1)}°`;
+        dom.metricOffaxisBar.style.width = `${clamp((seat.offAxis / 45) * 100, 4, 100)}%`;
+        if (seat.offAxis <= 8) {
+          dom.metricOffaxisStatus.textContent = '完美居中';
+          dom.metricOffaxisStatus.className = 'text-[10px] font-medium text-emerald-400';
+          dom.metricOffaxisBar.className = 'h-full bg-emerald-400 rounded-full transition-all duration-300';
+        } else if (seat.offAxis <= 20) {
+          dom.metricOffaxisStatus.textContent = '轻微偏角';
+          dom.metricOffaxisStatus.className = 'text-[10px] font-medium text-amber-300';
+          dom.metricOffaxisBar.className = 'h-full bg-amber-400 rounded-full transition-all duration-300';
+        } else {
+          dom.metricOffaxisStatus.textContent = '畸变明显';
+          dom.metricOffaxisStatus.className = 'text-[10px] font-medium text-rose-400';
+          dom.metricOffaxisBar.className = 'h-full bg-rose-500 rounded-full transition-all duration-300';
+        }
+
+        // 视距比
+        dom.metricRatio.textContent = `${seat.distRatio.toFixed(2)}×`;
+        dom.metricDistM.textContent = `${seat.distToCenter.toFixed(1)}m`;
+        dom.metricRatioBar.style.width = `${clamp((seat.distRatio / 2.0) * 100, 5, 100)}%`;
+      }
+
+      /**
+       * 根据当前三态布局渲染最适触控尺寸的 2D 选座平面图
+       */
+      function render2DSeatMap() {
+        const preset = HALL_PRESETS[state.presetKey];
+        const mode = state.layoutMode;
+        const container = dom.seatMapGrid;
+        container.innerHTML = '';
+
+        let btnSizeClass;
+        let rowGapClass;
+        let aisleGapClass;
+        let labelClass;
+
+        if (mode === 'mobile-portrait') {
+          btnSizeClass = preset.cols >= 18
+            ? 'w-6 h-6 text-[10px] rounded-md'
+            : (preset.cols >= 14 ? 'w-7 h-7 text-[11px] rounded-lg' : 'w-8 h-8 text-xs rounded-lg');
+          rowGapClass = 'flex items-center gap-1';
+          aisleGapClass = 'w-3 shrink-0';
+          labelClass = 'w-7 text-right pr-1 text-[10px] font-mono text-gray-400 shrink-0';
+        } else if (mode === 'mobile-landscape') {
+          // 横屏右侧抽屉宽度 280~370px：紧凑清晰又好点按
+          btnSizeClass = preset.cols >= 18
+            ? 'w-5 h-5 text-[9px] rounded-[5px]'
+            : (preset.cols >= 14 ? 'w-6 h-6 text-[10px] rounded-md' : 'w-7 h-7 text-[11px] rounded-md');
+          rowGapClass = 'flex items-center gap-[3px]';
+          aisleGapClass = 'w-2.5 shrink-0';
+          labelClass = 'w-6 text-right pr-1 text-[9px] font-mono text-gray-400 shrink-0';
+        } else {
+          btnSizeClass = preset.cols >= 18
+            ? 'w-3.5 h-3.5 text-[7px] rounded-[3px]'
+            : (preset.cols >= 14 ? 'w-[18px] h-[18px] text-[8px] rounded-[4px]' : 'w-6 h-6 text-[10px] rounded-[5px]');
+          rowGapClass = 'flex items-center gap-[3px]';
+          aisleGapClass = preset.cols >= 18 ? 'w-2 shrink-0' : 'w-2.5 shrink-0';
+          labelClass = 'w-6 text-right pr-1 text-[9px] font-mono text-gray-500 shrink-0';
+        }
+
+        for (let r = 0; r < preset.rows; r++) {
+          const rowDiv = document.createElement('div');
+          rowDiv.className = rowGapClass;
+
+          const rowLabel = document.createElement('span');
+          rowLabel.className = labelClass;
+          rowLabel.textContent = `${r + 1}排`;
+          rowDiv.appendChild(rowLabel);
+
+          for (let c = 0; c < preset.cols; c++) {
+            if (preset.aisles.includes(c)) {
+              const gap = document.createElement('span');
+              gap.className = aisleGapClass;
+              rowDiv.appendChild(gap);
+            }
+
+            const seat = getSeatData(r, c);
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.dataset.row = r;
+            btn.dataset.col = c;
+            btn.title = `${seat.label} · ${seat.score}分 (${seat.tag})`;
+
+            let bgClass = 'bg-rose-950/90 border-white/15 text-rose-200/75';
+            if (seat.isGoldenZone) {
+              bgClass = 'bg-rose-900/95 border-amber-400/80 text-amber-200 golden';
+            } else if (seat.score < 62) {
+              bgClass = 'bg-zinc-800/85 border-white/10 text-gray-500';
+            }
+
+            btn.className = `seat-btn border flex items-center justify-center font-mono leading-none ${btnSizeClass} ${bgClass}`;
+            btn.textContent = seat.index === state.goldenSeatIndex ? '★' : (c + 1);
+            btn.addEventListener('click', () => selectSeat(r, c, false));
+            rowDiv.appendChild(btn);
+          }
+          container.appendChild(rowDiv);
+        }
+        updateSeatMapSelection();
+      }
+
+      function updateSeatMapSelection() {
+        const buttons = dom.seatMapGrid.querySelectorAll('.seat-btn');
+        buttons.forEach(btn => {
+          const isSelected = Number(btn.dataset.row) === state.selectedRow && Number(btn.dataset.col) === state.selectedCol;
+          btn.classList.toggle('selected', isSelected);
+        });
+      }
+
+      function switchHallPreset(presetKey, silent = false) {
+        state.presetKey = presetKey;
+        const preset = HALL_PRESETS[presetKey];
+
+        document.querySelectorAll('.preset-btn').forEach(btn => {
+          btn.className = btn.dataset.preset === presetKey
+            ? 'preset-btn px-3 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap bg-amber-400 text-gray-950 shadow'
+            : 'preset-btn px-3 py-1.5 rounded-xl text-xs font-medium transition whitespace-nowrap text-gray-300 hover:text-white hover:bg-white/10';
+        });
+
+        document.querySelectorAll('.preset-btn-mob').forEach(btn => {
+          btn.className = btn.dataset.preset === presetKey
+            ? 'preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95 bg-amber-400/20 border-amber-400 text-amber-200'
+            : 'preset-btn-mob p-2 rounded-xl border text-left transition active:scale-95 bg-white/[0.04] border-white/10 text-gray-200';
+        });
+
+        dom.deskHallSub.textContent = preset.subtitle;
+        dom.specHallName.textContent = preset.name;
+        dom.specScreenSize.textContent = `${preset.screenWidth.toFixed(1)}m × ${preset.screenHeight.toFixed(1)}m`;
+        dom.specScreenRatio.textContent = `${(preset.screenWidth / preset.screenHeight).toFixed(2)}:1 · ${preset.screenCurve > 0 ? '微曲面' : '平面'}`;
+        dom.specStepRise.textContent = `${preset.stepRise.toFixed(2)}m / 排`;
+
+        computeAllSeatsData();
+        buildTheater(presetKey);
+        refreshScreenContentOnce();
+        render2DSeatMap();
+
+        const best = state.seatsData[state.goldenSeatIndex];
+        selectSeat(best.row, best.col, true);
+
+        if (!silent) {
+          showToast(`已切换至【${preset.name}】，自动定位黄金C位 ${best.label}`);
+        }
+      }
+
+      function refreshScreenContentOnce() {
+        if (!screenCtx) return;
+        if (state.screenMode === 'thx') renderTHXCalibrationScreen();
+        else if (state.screenMode === 'custom') renderCustomImageScreen();
+        else renderSciFiScreen(screenAnimTime);
+      }
+
+      function setScreenMode(mode) {
+        state.screenMode = mode;
+        document.querySelectorAll('.screen-mode-btn').forEach(btn => {
+          const dot = btn.querySelector('.active-dot');
+          if (btn.dataset.screen === mode) {
+            btn.classList.add('bg-amber-400/15', 'border-amber-400/55');
+            btn.classList.remove('bg-white/[0.03]', 'border-white/10', 'hover:bg-white/[0.07]');
+            if (dot) dot.classList.remove('hidden');
+          } else {
+            btn.classList.remove('bg-amber-400/15', 'border-amber-400/55');
+            btn.classList.add('bg-white/[0.03]', 'border-white/10', 'hover:bg-white/[0.07]');
+            if (dot) dot.classList.add('hidden');
+          }
+        });
+        refreshScreenContentOnce();
+      }
+
+      // =========================================================================
+      // 11. 就地刷新重建 3D 引擎 & 全屏 API 检测控制
+      // =========================================================================
+      function triggerRefreshIconSpin() {
+        document.querySelectorAll('.refresh-spin-target').forEach(icon => {
+          icon.classList.remove('spin-once');
+          void icon.offsetWidth;
+          icon.classList.add('spin-once');
+        });
+      }
+
+      async function rebuild3DEngine(silent = false) {
+        triggerRefreshIconSpin();
+        hideErrorOverlay();
+
+        if (!window.THREE || !window.THREE.WebGLRenderer) {
+          await bootstrapApp();
+          return;
+        }
+
+        try {
+          const savedRow = state.selectedRow;
+          const savedCol = state.selectedCol;
+
+          initThreeEngine();
+          computeAllSeatsData();
+          buildTheater(state.presetKey);
+          refreshScreenContentOnce();
+          render2DSeatMap();
+          selectSeat(savedRow, savedCol, true);
+          syncCameraViewport(true);
+
+          camCtrl.currentPos.copy(camCtrl.fpPos);
+          const preset = HALL_PRESETS[state.presetKey];
+          camCtrl.currentLookAt.set(0, preset.screenBottomY + preset.screenHeight / 2, 0);
+
+          isAppReady = true;
+          lastFrameTime = 0;
+          rafId = requestAnimationFrame(animate);
+
+          if (!silent) showToast('3D 影院渲染器已刷新重建完成');
+        } catch (err) {
+          console.error('重建 3D 引擎失败:', err);
+          showErrorOverlay('3D 渲染器重建失败', err.message || '请点击强制重载页面以恢复。');
+        }
+      }
+
+      function initFullscreenButton() {
+        const docEl = document.documentElement;
+        const canFullscreen = Boolean(
+          (document.fullscreenEnabled || document.webkitFullscreenEnabled) &&
+          (docEl.requestFullscreen || docEl.webkitRequestFullscreen)
+        );
+        if (!canFullscreen) {
+          dom.btnLandFullscreen.classList.add('hidden');
+          return;
+        }
+
+        const updateFsUI = () => {
+          const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+          dom.landFsIconEnter.classList.toggle('hidden', isFs);
+          dom.landFsIconExit.classList.toggle('hidden', !isFs);
+        };
+
+        dom.btnLandFullscreen.addEventListener('click', () => {
+          const isFs = Boolean(document.fullscreenElement || document.webkitFullscreenElement);
+          try {
+            if (!isFs) {
+              const fn = docEl.requestFullscreen || docEl.webkitRequestFullscreen;
+              const p = fn && fn.call(docEl);
+              if (p && p.catch) p.catch(() => showToast('当前浏览器限制了全屏请求'));
+            } else {
+              const exitFn = document.exitFullscreen || document.webkitExitFullscreen;
+              if (exitFn) exitFn.call(document);
+            }
+          } catch (e) {
+            showToast('无法切换全屏模式');
+          }
+        });
+
+        document.addEventListener('fullscreenchange', () => {
+          updateFsUI();
+          scheduleViewportSettle();
+        });
+        document.addEventListener('webkitfullscreenchange', () => {
+          updateFsUI();
+          scheduleViewportSettle();
+        });
+        updateFsUI();
+      }
+
+      // =========================================================================
+      // 12. 鼠标 / 触摸交互 + 竖屏下滑关抽屉 + 横屏右滑关抽屉
+      // =========================================================================
+      function getSeatUnderPointer(clientX, clientY) {
+        if (!seatPickMesh || !renderer || state.viewMode !== 'overview') return -1;
+        const rect = renderer.domElement.getBoundingClientRect();
+        const mouse = new THREE.Vector2(
+          ((clientX - rect.left) / rect.width) * 2 - 1,
+          -((clientY - rect.top) / rect.height) * 2 + 1
+        );
+        raycaster.setFromCamera(mouse, camera);
+        const hits = raycaster.intersectObject(seatPickMesh, false);
+        return (hits.length > 0 && hits[0].instanceId !== undefined) ? hits[0].instanceId : -1;
+      }
+
+      function handlePointerHover(clientX, clientY) {
+        if (state.layoutMode !== 'desktop' || state.viewMode !== 'overview' || pointer.isDown) {
+          if (hoverOutlineMesh) hoverOutlineMesh.visible = false;
+          dom.tooltip.classList.add('hidden');
+          dom.canvasContainer.classList.remove('pointer-seat');
+          return;
+        }
+        const idx = getSeatUnderPointer(clientX, clientY);
+        if (idx >= 0 && state.seatsData[idx]) {
+          const seat = state.seatsData[idx];
+          dom.canvasContainer.classList.add('pointer-seat');
+          if (hoverOutlineMesh) {
+            hoverOutlineMesh.position.set(seat.x, seat.floorY + 0.65, seat.z + 0.08);
+            hoverOutlineMesh.visible = true;
+          }
+          dom.tooltipSeatLabel.textContent = `${seat.label} · ${seat.gradeText}`;
+          dom.tooltipSeatScore.textContent = `综合 ${seat.score}分 · 单击选座 / 双击入座`;
+          dom.tooltip.style.left = `${Math.min(window.innerWidth - 205, clientX + 14)}px`;
+          dom.tooltip.style.top = `${Math.max(12, clientY - 44)}px`;
+          dom.tooltip.classList.remove('hidden');
+        } else {
+          dom.canvasContainer.classList.remove('pointer-seat');
+          if (hoverOutlineMesh) hoverOutlineMesh.visible = false;
+          dom.tooltip.classList.add('hidden');
+        }
+      }
+
+      function handleCanvasTap(clientX, clientY) {
+        // 移动端（无论竖屏或横屏）：轻点抽屉外的 3D 画布区域，优先顺滑收起抽屉
+        if (isMobileLayout() && state.activeDrawer) {
+          closeMobileDrawer();
+          return;
+        }
+        if (state.viewMode !== 'overview') return;
+
+        const idx = getSeatUnderPointer(clientX, clientY);
+        if (idx >= 0 && state.seatsData[idx]) {
+          const seat = state.seatsData[idx];
+          selectSeat(seat.row, seat.col, false);
+
+          const now = performance.now();
+          if (pointer.lastTapInstance === idx && now - pointer.lastTapTime < 420) {
+            setViewMode('fp');
+            showToast(`已入座 ${seat.label} 第一人称视角`);
+          } else {
+            showToast(`已选中 ${seat.label} (${seat.score}分)，双击可直接入座`);
+          }
+          pointer.lastTapTime = now;
+          pointer.lastTapInstance = idx;
+        }
+      }
+
+      function applyDragDelta(dx, dy) {
+        if (!camCtrl) return;
+        if (state.viewMode === 'fp') {
+          camCtrl.fpTargetYaw = clamp(camCtrl.fpTargetYaw + dx * 0.0042, -2.5, 2.5);
+          camCtrl.fpTargetPitch = clamp(camCtrl.fpTargetPitch + dy * 0.0038, -0.75, 1.05);
+        } else {
+          camCtrl.orbitTargetTheta -= dx * 0.006;
+          camCtrl.orbitTargetPhi = clamp(camCtrl.orbitTargetPhi - dy * 0.0055, 0.25, 1.46);
+        }
+      }
+
+      function bindCanvasInteractions() {
+        if (interactionsBound) return;
+        interactionsBound = true;
+        const el = dom.canvasContainer;
+
+        // 鼠标拖拽与点击
+        el.addEventListener('mousedown', (e) => {
+          if (e.button !== 0) return;
+          pointer.isDown = true;
+          pointer.lastX = e.clientX;
+          pointer.lastY = e.clientY;
+          pointer.movedDist = 0;
+        });
+
+        window.addEventListener('mousemove', (e) => {
+          if (!pointer.isDown) {
+            handlePointerHover(e.clientX, e.clientY);
+            return;
+          }
+          const dx = e.clientX - pointer.lastX;
+          const dy = e.clientY - pointer.lastY;
+          pointer.lastX = e.clientX;
+          pointer.lastY = e.clientY;
+          pointer.movedDist += Math.hypot(dx, dy);
+          applyDragDelta(dx, dy);
+        });
+
+        window.addEventListener('mouseup', (e) => {
+          if (!pointer.isDown) return;
+          pointer.isDown = false;
+          if (pointer.movedDist <= DRAG_THRESHOLD_PX) {
+            handleCanvasTap(e.clientX, e.clientY);
+          }
+        });
+
+        el.addEventListener('wheel', (e) => {
+          if (state.viewMode !== 'overview' || !camCtrl) return;
+          e.preventDefault();
+          const preset = HALL_PRESETS[state.presetKey];
+          const maxR = Math.max(preset.screenWidth, preset.rows * preset.rowSpacing) * 1.45;
+          camCtrl.orbitTargetRadius = clamp(camCtrl.orbitTargetRadius + e.deltaY * 0.015, 6.5, maxR);
+        }, { passive: false });
+
+        // 移动端触控（单指旋转 + 双指捏合缩放 + 8px 点击/拖拽分界）
+        el.addEventListener('touchstart', (e) => {
+          if (e.touches.length === 1) {
+            const t = e.touches[0];
+            pointer.isDown = true;
+            pointer.lastX = t.clientX;
+            pointer.lastY = t.clientY;
+            pointer.movedDist = 0;
+          } else if (e.touches.length === 2 && state.viewMode === 'overview') {
+            pointer.isDown = false;
+            pointer.movedDist = 999;
+            pointer.pinchStartDist = Math.hypot(
+              e.touches[0].clientX - e.touches[1].clientX,
+              e.touches[0].clientY - e.touches[1].clientY
+            );
+            pointer.pinchStartRadius = camCtrl ? camCtrl.orbitTargetRadius : 18;
+          }
+        }, { passive: true });
+
+        el.addEventListener('touchmove', (e) => {
+          if (e.touches.length === 1 && pointer.isDown) {
+            const t = e.touches[0];
+            const dx = t.clientX - pointer.lastX;
+            const dy = t.clientY - pointer.lastY;
+            pointer.lastX = t.clientX;
+            pointer.lastY = t.clientY;
+            pointer.movedDist += Math.hypot(dx, dy);
+            applyDragDelta(dx * 1.25, dy * 1.25);
+          } else if (e.touches.length === 2 && state.viewMode === 'overview' && camCtrl) {
+            const dist = Math.hypot(
+              e.touches[0].clientX - e.touches[1].clientX,
+              e.touches[0].clientY - e.touches[1].clientY
+            );
+            if (pointer.pinchStartDist > 10) {
+              const scale = pointer.pinchStartDist / Math.max(10, dist);
+              const preset = HALL_PRESETS[state.presetKey];
+              const maxR = Math.max(preset.screenWidth, preset.rows * preset.rowSpacing) * 1.45;
+              camCtrl.orbitTargetRadius = clamp(pointer.pinchStartRadius * scale, 6.5, maxR);
+            }
+          }
+        }, { passive: true });
+
+        el.addEventListener('touchend', (e) => {
+          if (pointer.isDown && pointer.movedDist <= DRAG_THRESHOLD_PX && e.changedTouches.length > 0) {
+            const t = e.changedTouches[0];
+            handleCanvasTap(t.clientX, t.clientY);
+          }
+          pointer.isDown = false;
+        }, { passive: true });
+
+        // 竖屏底部抽屉把手：向下滑动关闭
+        let portStartY = 0, portDeltaY = 0;
+        dom.portraitSheetHeader.addEventListener('touchstart', (e) => {
+          if (e.touches.length !== 1) return;
+          portStartY = e.touches[0].clientY;
+          portDeltaY = 0;
+          dom.portraitSheet.classList.add('dragging');
+        }, { passive: true });
+        dom.portraitSheetHeader.addEventListener('touchmove', (e) => {
+          if (e.touches.length !== 1) return;
+          portDeltaY = Math.max(0, e.touches[0].clientY - portStartY);
+          dom.portraitSheet.style.transform = `translateY(${portDeltaY}px)`;
+        }, { passive: true });
+        dom.portraitSheetHeader.addEventListener('touchend', () => {
+          dom.portraitSheet.classList.remove('dragging');
+          if (portDeltaY > 64) closeMobileDrawer();
+          else dom.portraitSheet.style.transform = '';
+        }, { passive: true });
+
+        // 横屏右侧抽屉把手 & 标题栏：向右滑动关闭
+        let landStartX = 0, landDeltaX = 0;
+        const bindLandscapeSwipe = (targetEl) => {
+          targetEl.addEventListener('touchstart', (e) => {
+            if (e.touches.length !== 1) return;
+            landStartX = e.touches[0].clientX;
+            landDeltaX = 0;
+            dom.landscapeDrawer.classList.add('dragging');
+          }, { passive: true });
+          targetEl.addEventListener('touchmove', (e) => {
+            if (e.touches.length !== 1) return;
+            landDeltaX = Math.max(0, e.touches[0].clientX - landStartX);
+            dom.landscapeDrawer.style.transform = `translateX(${landDeltaX}px)`;
+          }, { passive: true });
+          targetEl.addEventListener('touchend', () => {
+            dom.landscapeDrawer.classList.remove('dragging');
+            if (landDeltaX > 60) closeMobileDrawer();
+            else dom.landscapeDrawer.style.transform = '';
+          }, { passive: true });
+        };
+        bindLandscapeSwipe(dom.landscapeDrawerHandle);
+        bindLandscapeSwipe(dom.landscapeDrawerHeader);
+      }
+
+      // =========================================================================
+      // 13. 多通道防抖旋转稳定器 (适配 iOS Safari / Android Chrome 异步重排)
+      // =========================================================================
+      let settleTimers = [];
+      function scheduleViewportSettle() {
+        settleTimers.forEach(t => clearTimeout(t));
+        settleTimers = [];
+
+        requestAnimationFrame(() => syncResponsiveLayout(false));
+        settleTimers.push(setTimeout(() => syncResponsiveLayout(false), 120));
+        settleTimers.push(setTimeout(() => syncResponsiveLayout(false), 350));
+      }
+
+      // =========================================================================
+      // 14. 绑定所有 UI 事件
+      // =========================================================================
+      function bindUIEvents() {
+        if (uiEventsBound) return;
+        uiEventsBound = true;
+
+        // 刷新与恢复按钮
+        document.getElementById('btn-desk-refresh').addEventListener('click', () => rebuild3DEngine(false));
+        document.getElementById('btn-port-refresh').addEventListener('click', () => rebuild3DEngine(false));
+        document.getElementById('btn-land-refresh').addEventListener('click', () => rebuild3DEngine(false));
+        document.getElementById('btn-error-rebuild').addEventListener('click', () => rebuild3DEngine(false));
+        document.getElementById('btn-error-hard-reload').addEventListener('click', () => {
+          try { window.location.reload(); } catch (e) { rebuild3DEngine(false); }
+        });
+        dom.btnLoadingRetry.addEventListener('click', () => rebuild3DEngine(false));
+
+        // 影厅预设切换
+        document.querySelectorAll('.preset-btn, .preset-btn-mob').forEach(btn => {
+          btn.addEventListener('click', () => switchHallPreset(btn.dataset.preset, false));
+        });
+
+        // 视角切换
+        dom.btnModeFp.addEventListener('click', () => setViewMode('fp'));
+        dom.btnModeOverview.addEventListener('click', () => setViewMode('overview'));
+        const toggleMobView = () => {
+          const next = state.viewMode === 'fp' ? 'overview' : 'fp';
+          setViewMode(next);
+          showToast(next === 'fp' ? '已切换至第一人称入座视角' : '已切换至 3D 全景，可点击座椅选座');
+        };
+        document.getElementById('btn-port-toggle-view').addEventListener('click', toggleMobView);
+        document.getElementById('btn-land-toggle-view').addEventListener('click', toggleMobView);
+
+        // 竖屏 & 横屏 Dock 抽屉入口
+        document.querySelectorAll('.port-dock-btn, .land-dock-btn').forEach(btn => {
+          btn.addEventListener('click', () => openMobileDrawer(btn.dataset.drawer, true));
+        });
+        document.getElementById('port-top-seat-pill').addEventListener('click', () => openMobileDrawer('seats', true));
+        document.getElementById('land-top-eval-pill').addEventListener('click', () => openMobileDrawer('metrics', true));
+        document.getElementById('btn-close-port-sheet').addEventListener('click', () => closeMobileDrawer());
+        document.getElementById('btn-close-land-drawer').addEventListener('click', () => closeMobileDrawer());
+
+        // 灯光切换
+        document.getElementById('btn-env-lights').addEventListener('click', () => applyHouseLights(!state.houseLightsOn, false));
+
+        // 纯享观影模式
+        const setPureMode = (enable) => {
+          state.pureMode = enable;
+          if (enable) closeMobileDrawer(true);
+          const uiNodes = [
+            dom.desktopTopBar, dom.desktopLeftPanel, dom.desktopRightPanel, dom.desktopBottomHint,
+            dom.portraitTopBar, dom.portraitDock,
+            dom.landscapeTopBar, dom.landscapeDock
+          ];
+          uiNodes.forEach(node => {
+            if (node) node.classList.toggle('ui-hidden', enable);
+          });
+          dom.exitPureBtn.classList.toggle('hidden', !enable);
+          syncDesktopCollapseButtons();
+          computeTargetViewOffset();
+        };
+        document.getElementById('btn-desk-pure').addEventListener('click', () => setPureMode(true));
+        document.getElementById('btn-port-pure').addEventListener('click', () => setPureMode(true));
+        document.getElementById('btn-land-pure').addEventListener('click', () => setPureMode(true));
+        dom.exitPureBtn.addEventListener('click', () => setPureMode(false));
+
+        // 桌面端左右面板折叠/展开
+        document.getElementById('btn-collapse-left').addEventListener('click', () => {
+          state.leftCollapsed = true;
+          syncDesktopCollapseButtons();
+        });
+        dom.btnExpandLeft.addEventListener('click', () => {
+          state.leftCollapsed = false;
+          syncDesktopCollapseButtons();
+        });
+        document.getElementById('btn-collapse-right').addEventListener('click', () => {
+          state.rightCollapsed = true;
+          syncDesktopCollapseButtons();
+        });
+        dom.btnExpandRight.addEventListener('click', () => {
+          state.rightCollapsed = false;
+          syncDesktopCollapseButtons();
+        });
+
+        // 动态银幕模式切换与本地图片上传
+        document.querySelectorAll('.screen-mode-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const mode = btn.dataset.screen;
+            if (mode === 'custom') {
+              setScreenMode('custom');
+              dom.customImageInput.click();
+            } else {
+              setScreenMode(mode);
+            }
+          });
+        });
+
+        dom.customImageInput.addEventListener('change', (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          const reader = new FileReader();
+          reader.onload = (ev) => {
+            const img = new Image();
+            img.onload = () => {
+              state.customImageObj = img;
+              dom.customImgStatus.textContent = `已投屏: ${file.name.slice(0, 16)}`;
+              setScreenMode('custom');
+              showToast('自定义图片已投射至银幕');
+            };
+            img.onerror = () => showToast('图片解析失败，请选择有效图片文件');
+            img.src = ev.target.result;
+          };
+          reader.readAsDataURL(file);
+        });
+
+        // 身高滑块
+        const applyHeight = (hVal) => {
+          state.viewerHeightCm = clamp(Number(hVal), 120, 190);
+          dom.heightSlider.value = state.viewerHeightCm;
+          dom.heightValue.textContent = state.viewerHeightCm;
+          dom.heightTag.textContent = state.viewerHeightCm <= 140
+            ? '儿童视点'
+            : (state.viewerHeightCm >= 180 ? '高个视点' : '标准成人');
+
+          computeAllSeatsData();
+          const seat = getSeatData(state.selectedRow, state.selectedCol);
+          if (seat && camCtrl) {
+            camCtrl.fpTargetPos.y = seat.eyeY;
+            const preset = HALL_PRESETS[state.presetKey];
+            const screenCenterY = preset.screenBottomY + preset.screenHeight / 2;
+            camCtrl.fpDefaultPitch = Math.atan2(screenCenterY - seat.eyeY, Math.hypot(seat.x, seat.z));
+            updateMetricsUI(seat);
+          }
+        };
+        dom.heightSlider.addEventListener('input', (e) => applyHeight(e.target.value));
+        document.querySelectorAll('.height-quick').forEach(btn => {
+          btn.addEventListener('click', () => applyHeight(btn.dataset.h));
+        });
+
+        // 模拟前排观众开关
+        dom.toggleAudience.addEventListener('click', () => {
+          state.showAudience = !state.showAudience;
+          dom.toggleAudience.setAttribute('aria-checked', String(state.showAudience));
+          dom.toggleAudience.classList.toggle('bg-amber-400', state.showAudience);
+          dom.toggleAudience.classList.toggle('bg-white/15', !state.showAudience);
+          dom.toggleAudienceKnob.classList.toggle('translate-x-5', state.showAudience);
+          updateAudienceMeshes();
+          if (state.showAudience) showToast('已显示前排观众，可调节身高测试遮挡');
+        });
+
+        // 黄金 C 位一键跳转
+        document.getElementById('btn-golden-seat').addEventListener('click', () => {
+          const best = state.seatsData[state.goldenSeatIndex];
+          if (!best) return;
+          selectSeat(best.row, best.col, false);
+          showToast(`👑 已定位黄金C位：${best.label} (${best.score}分)`);
+        });
+
+        // 视角回正
+        const recenterCamera = () => {
+          if (!camCtrl) return;
+          if (state.viewMode === 'fp') {
+            camCtrl.fpTargetYaw = camCtrl.fpDefaultYaw;
+            camCtrl.fpTargetPitch = camCtrl.fpDefaultPitch;
+            showToast('视线已回正至银幕中心');
+          } else {
+            const preset = HALL_PRESETS[state.presetKey];
+            const lastRow = getRowCoords(preset, preset.rows - 1);
+            const hallWidth = Math.max(preset.screenWidth + 3.2, 16);
+            camCtrl.orbitTargetTheta = 0.42;
+            camCtrl.orbitTargetPhi = 1.08;
+            camCtrl.orbitTargetRadius = Math.max(hallWidth, lastRow.z + 3.2) * 0.94;
+            showToast('3D 全景机位已重置');
+          }
+        };
+        document.getElementById('btn-desk-recenter').addEventListener('click', recenterCamera);
+        document.getElementById('btn-port-recenter').addEventListener('click', recenterCamera);
+        document.getElementById('btn-land-recenter').addEventListener('click', recenterCamera);
+        document.getElementById('btn-env-recenter').addEventListener('click', recenterCamera);
+
+        // 键盘快捷键
+        window.addEventListener('keydown', (e) => {
+          if (e.key === 'r' || e.key === 'R') recenterCamera();
+          else if (e.key === 'Escape' && state.pureMode) setPureMode(false);
+          else if (e.key === 'ArrowUp') selectSeat(state.selectedRow - 1, state.selectedCol, false);
+          else if (e.key === 'ArrowDown') selectSeat(state.selectedRow + 1, state.selectedCol, false);
+          else if (e.key === 'ArrowLeft') selectSeat(state.selectedRow, state.selectedCol - 1, false);
+          else if (e.key === 'ArrowRight') selectSeat(state.selectedRow, state.selectedCol + 1, false);
+        });
+
+        // 初始化横屏全屏按钮
+        initFullscreenButton();
+
+        // 监听窗口尺寸、屏幕旋转、visualViewport 变化（多帧稳定防异步重排错位）
+        window.addEventListener('resize', scheduleViewportSettle);
+        window.addEventListener('orientationchange', scheduleViewportSettle);
+        if (window.visualViewport) {
+          window.visualViewport.addEventListener('resize', scheduleViewportSettle);
+        }
+      }
+
+      // =========================================================================
+      // 15. 动画渲染主循环 (含平滑相机偏移与超宽屏 FOV 实时渲染)
+      // =========================================================================
+      let lastFrameTime = 0;
+
+      function animate(now) {
+        rafId = requestAnimationFrame(animate);
+        if (!renderer || !scene || !camera) return;
+
+        const dt = lastFrameTime ? Math.min((now - lastFrameTime) / 1000, 0.05) : 0.016;
+        lastFrameTime = now;
+        screenAnimTime += dt;
+
+        if (state.screenMode === 'scifi') renderSciFiScreen(screenAnimTime);
+
+        // 动态银幕漫反射光平滑过渡
+        currentBounceColor.lerp(targetBounceColor, 1 - Math.exp(-3.5 * dt));
+        screenBounceLights.forEach((light, i) => {
+          light.color.copy(currentBounceColor);
+          const baseInt = state.houseLightsOn ? 0.55 : (i === 1 ? 1.5 : 0.95);
+          const flicker = state.screenMode === 'scifi' ? (1 + 0.06 * Math.sin(screenAnimTime * 3.1 + i)) : 1;
+          light.intensity = baseInt * flicker;
+        });
+
+        // 选中光柱悬浮钻石自转
+        if (selectionBeaconGroup && selectionBeaconGroup.visible) {
+          const diamond = selectionBeaconGroup.getObjectByName('beaconDiamond');
+          if (diamond) {
+            diamond.rotation.y += dt * 1.8;
+            diamond.position.y = 2.02 + Math.sin(screenAnimTime * 3.2) * 0.12;
+          }
+        }
+
+        // 丝滑插值相机水平/垂直视口偏移（抽屉开合时银幕顺滑居中到可见区）
+        const dampOffset = 1 - Math.exp(-10.5 * dt);
+        viewOffsetAnim.curX += (viewOffsetAnim.targetX - viewOffsetAnim.curX) * dampOffset;
+        viewOffsetAnim.curY += (viewOffsetAnim.targetY - viewOffsetAnim.curY) * dampOffset;
+        applyCameraViewOffset(false);
+
+        const dampPos = 1 - Math.exp(-7.2 * dt);
+        const dampRot = 1 - Math.exp(-10.5 * dt);
+
+        if (state.viewMode === 'fp') {
+          camCtrl.fpPos.lerp(camCtrl.fpTargetPos, dampPos);
+          camCtrl.fpYaw += (camCtrl.fpTargetYaw - camCtrl.fpYaw) * dampRot;
+          camCtrl.fpPitch += (camCtrl.fpTargetPitch - camCtrl.fpPitch) * dampRot;
+
+          const lookDir = new THREE.Vector3(
+            -Math.sin(camCtrl.fpYaw) * Math.cos(camCtrl.fpPitch),
+            Math.sin(camCtrl.fpPitch),
+            -Math.cos(camCtrl.fpYaw) * Math.cos(camCtrl.fpPitch)
+          );
+          const desiredLookAt = camCtrl.fpPos.clone().add(lookDir.multiplyScalar(10));
+
+          camCtrl.currentPos.lerp(camCtrl.fpPos, dampPos);
+          camCtrl.currentLookAt.lerp(desiredLookAt, dampRot);
+          camera.position.copy(camCtrl.currentPos);
+          camera.lookAt(camCtrl.currentLookAt);
+
+          if (ceilingMeshGroup) ceilingMeshGroup.visible = true;
+        } else {
+          camCtrl.orbitTheta += (camCtrl.orbitTargetTheta - camCtrl.orbitTheta) * dampRot;
+          camCtrl.orbitPhi += (camCtrl.orbitTargetPhi - camCtrl.orbitPhi) * dampRot;
+          camCtrl.orbitRadius += (camCtrl.orbitTargetRadius - camCtrl.orbitRadius) * dampPos;
+
+          const sinPhi = Math.sin(camCtrl.orbitPhi);
+          const desiredPos = new THREE.Vector3(
+            camCtrl.orbitTarget.x + camCtrl.orbitRadius * sinPhi * Math.sin(camCtrl.orbitTheta),
+            camCtrl.orbitTarget.y + camCtrl.orbitRadius * Math.cos(camCtrl.orbitPhi),
+            camCtrl.orbitTarget.z + camCtrl.orbitRadius * sinPhi * Math.cos(camCtrl.orbitTheta)
+          );
+          camCtrl.currentPos.lerp(desiredPos, dampPos);
+          camCtrl.currentLookAt.lerp(camCtrl.orbitTarget, dampPos);
+          camera.position.copy(camCtrl.currentPos);
+          camera.lookAt(camCtrl.currentLookAt);
+
+          if (ceilingMeshGroup) {
+            const preset = HALL_PRESETS[state.presetKey];
+            const lastRow = getRowCoords(preset, preset.rows - 1);
+            const ceilingY = Math.max(preset.screenBottomY + preset.screenHeight + preset.ceilingHeightExtra, lastRow.floorY + 5.2);
+            ceilingMeshGroup.visible = camera.position.y < ceilingY - 0.6;
+          }
+        }
+
+        renderer.render(scene, camera);
+      }
+
+      // =========================================================================
+      // 16. 启动引导与 8 秒超时看门狗
+      // =========================================================================
+      async function bootstrapApp() {
+        isAppReady = false;
+        hideErrorOverlay();
+        dom.loadingOverlay.classList.remove('hidden');
+        dom.btnLoadingRetry.classList.add('hidden');
+        dom.loadingStatus.textContent = '正在连接 Three.js 3D 渲染引擎...';
+
+        clearTimeout(slowHintTimer);
+        clearTimeout(loadWatchdogTimer);
+        slowHintTimer = setTimeout(() => {
+          if (!isAppReady) dom.btnLoadingRetry.classList.remove('hidden');
+        }, 3800);
+        loadWatchdogTimer = setTimeout(() => {
+          if (!isAppReady) {
+            showErrorOverlay(
+              '3D 引擎加载超时（8 秒）',
+              '当前网络节点响应较慢，请点击「刷新重试」自动切换备用节点或强制重载页面。'
+            );
+          }
+        }, 8000);
+
+        try {
+          bindUIEvents();
+          await ensureThreeLoaded();
+          dom.loadingStatus.textContent = '正在搭建 3D 影厅光影与座位矩阵...';
+
+          initThreeEngine();
+          bindCanvasInteractions();
+          setScreenMode('scifi');
+          switchHallPreset(state.presetKey, true);
+          syncResponsiveLayout(true);
+
+          camCtrl.currentPos.copy(camCtrl.fpPos);
+          const preset = HALL_PRESETS[state.presetKey];
+          camCtrl.currentLookAt.set(0, preset.screenBottomY + preset.screenHeight / 2, 0);
+
+          isAppReady = true;
+          lastFrameTime = 0;
+          rafId = requestAnimationFrame(animate);
+          hideLoadingOverlay();
+        } catch (err) {
+          console.error('3D 影院初始化失败:', err);
+          showErrorOverlay('3D 影院初始化失败', err.message || '请确认设备已开启 WebGL 支持，然后点击刷新重试。');
+        }
+      }
+
+      window.onload = function () {
+        bootstrapApp();
+      };
+    })();
+  </script>
+</body>
+</html>
